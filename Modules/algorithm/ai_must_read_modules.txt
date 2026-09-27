@@ -1,0 +1,4 @@
+这是飞镖的算法库
+里面提供了一些你可以抓取然后自定义的算法
+这样就不用自己写详情见"D:\worka\dart_final_work\Modules\algorithm\algorithm.md"
+如果实在没有对应的算法（比如mpc、比例引导这些），因该由ai自己编写完成，并且放在D:\worka\dart_final_work\Modules\algorithm目录下，文件夹名字“算法名_ai”（例如比例引导的文件夹名就是png_ai）
