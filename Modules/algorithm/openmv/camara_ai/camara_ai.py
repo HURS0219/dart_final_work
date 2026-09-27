@@ -1,28 +1,28 @@
 # -*- coding: utf-8 -*-
 """
-camara_ai.py —— OpenMV 绿光识别模块
+camara_ai.py —— OpenMV 绿光识别模块（增强/Hybrid 版）
 ================================================================================
 作用：
-    把摄像头拍到的画面运算成“绿光目标”的坐标 (x, y)，供制导/自瞄使用。
-    目标靶是一个绿光点，本模块负责“稳定、高效”地识别它并给出像素坐标。
+    把摄像头拍到的画面运算成“绿光目标”的中心坐标与尺寸 (x, y, w, h)。
 
-设计要点（对应需求“保证稳定高效地识别”）：
-    1. 只在 RGB565 彩色域下用 LAB 阈值找绿色，避免灰度丢失颜色信息；
-    2. 用 find_blobs 做色块检测，取“面积最大的色块”作为绿光中心；
-    3. 关闭自动增益/白平衡/曝光，保证同一阈值在不同时刻表现一致；
-    4. 对坐标做一阶低通(EMA)平滑，抑制像素级抖动；
-    5. 丢帧保持(lost_hold)：连续丢失若干帧才判定“目标丢失”，避免忽有忽无。
+本版 = 我们的封装骨架 + 深大开源代码里验证过的若干做法：
+    1. 动态 ROI 跟踪：识别到目标后把搜索区收缩到光斑邻域(±FOUND_RANGE)，
+       丢失则回到全图 INIT_ROI —— 更快、更抗噪（借鉴深大 build_found_roi）；
+    2. 固定短曝光 + 固定增益：set_auto_exposure(False, exposure_us=800) 等，
+       防止高速光点的运动模糊（借鉴深大 EXPOSURE_US=800 / gain_db=20）；
+    3. 可选硬件读出窗 IOCTL_SET_READOUT_WINDOW：从传感器层面裁行，进一步提速；
+    4. 帧超时容错 get_frame()：snapshot 异常重试 → 重初始化传感器（借鉴深大）；
+    5. LED 指示：检测到亮绿灯、运行心跳蓝灯、开机闪烁（借鉴深大）。
 
 对外接口：
-    det = GreenLight()            # 构造，可选传入自定义参数
-    det.init_sensor()             # 初始化摄像头(只需一次)
-    x, y, found = det.detect()    # 采一帧并检测，返回坐标与“是否找到”
-    x, y, found = det.detect(img) # 也可传入已有的一帧 image 对象
+    det = GreenLight()
+    det.init_sensor()                     # 初始化(含开机 LED 指示)
+    x, y, w, h, found = det.detect()      # 采一帧并检测
+    x, y, w, h, found = det.detect(img)   # 传入已有帧
 
 注意：
-    * 绿色 LAB 阈值 GREEN_LAB 必须现场标定（用 OpenMV IDE 的阈值工具取一个
-      只框住绿光、框内其它区域尽量少的阈值），默认值仅供参考。
-    * 坐标单位为像素，范围为当前分辨率 (默认 QVGA: x∈[0,319], y∈[0,239])。
+    * 绿色 LAB 阈值 GREEN_LAB 必须现场标定（默认取深大联调值，仅供参考）。
+    * 坐标为像素，范围 QVGA: x∈[0,319], y∈[0,239]（默认）。
 ================================================================================
 """
 
@@ -30,130 +30,225 @@ import sensor
 import image
 import time
 
+try:
+    from pyb import LED
+    _HAS_LED = True
+except Exception:          # 主机端无 pyb，便于语法/逻辑自测
+    _HAS_LED = False
+
 
 # ============================================================================
 #                              可调参数区
 # ============================================================================
 
-# 绿色 LAB 阈值 (L_min, L_max, A_min, A_max, B_min, B_max)
-# 说明：绿光在 LAB 中 A(绿-红) 分量明显偏负，B(蓝-黄) 依光源略有差异。
-#      务必用 OpenMV IDE 阈值工具现场标定后替换本默认值。
-GREEN_LAB = (20, 100, -80, -25, -30, 45)
+# 绿色 LAB 阈值（深大联调值，务必现场用阈值工具标定）
+GREEN_LAB = (9, 100, -102, -25, 0, 127)
 
-# 检测感兴趣区域 ROI：None 表示整幅图；也可传 (x, y, w, h) 缩小搜索范围以提速
-ROI = None
-
-# 色块筛选：像素数/面积下限，滤掉噪点；merge 合并相邻色块，margin 为合并间距
-PIXELS_THRESHOLD = 20
-AREA_THRESHOLD = 20
-MERGE = True
-MERGE_MARGIN = 10
-
-# 扫描步长：越大越快但越粗；绿光点较小时建议 1~2
-X_STRIDE = 2
-Y_STRIDE = 2
-
-# 坐标平滑系数 (0~1)：越大越“跟手”，越小越平滑但延迟越大
-SMOOTH_ALPHA = 0.4
-
-# 丢帧保持帧数：连续丢失超过该帧数才判“目标丢失”，否则沿用上次坐标
-LOST_HOLD_FRAMES = 5
-
-# 摄像头初始化参数：跳帧数(等自动曝光稳定)与是否关闭自动调节
-SKIP_FRAMES_MS = 2000
-LOCK_AUTO = True      # True: 关闭自动增益/白平衡/曝光，保证阈值稳定
+# 传感器参数
 FRAMESIZE = sensor.QVGA
 PIXFORMAT = sensor.RGB565
+EXPOSURE_US = 3000         # 固定曝光, 防运动模糊; 远距离小光点 3000~4000, 近距离可降 800
+GAIN_DB = 20               # 固定增益
+SKIP_FRAMES_MS = 1500      # 初始化后跳帧，等图像稳定
+
+# 硬件读出窗(可选)：如 (0, 700, 640, 480) 只读出传感器中间一片，提速/限视场；None 关闭
+READOUT_WINDOW = None
+
+# 动态 ROI 跟踪
+INIT_ROI = (0, 0, 320, 240)  # 丢失时的全图搜索区
+FOUND_RANGE_X = 40           # 命中后向左右各扩展的像素
+FOUND_RANGE_Y = 40           # 命中后向上下各扩展的像素
+
+# 色块筛选：远距离小光点只有 2~6 像素, 下限设小, 靠颜色/ROI 抑噪
+PIXELS_THRESHOLD = 2
+AREA_THRESHOLD = 2
+MERGE = True
+MERGE_MARGIN = 10
+X_STRIDE = 1
+Y_STRIDE = 1
+
+# 坐标平滑与丢帧保持
+SMOOTH_ALPHA = 0.4
+LOST_HOLD_FRAMES = 5
+
+# 调用方需告知图像尺寸用于 ROI 裁剪(默认 QVGA)
+IMG_WIDTH = 320
+IMG_HEIGHT = 240
+
+# LED
+USE_LED = True
 
 
 # ============================================================================
 #                              绿光检测类
 # ============================================================================
 class GreenLight(object):
-    """绿光目标检测器：封装摄像头初始化与坐标输出。"""
+    """绿光目标检测器（增强版：动态 ROI + 固定曝光 + 帧容错 + LED）。"""
 
     def __init__(self,
                  green_lab=GREEN_LAB,
-                 roi=ROI,
+                 init_roi=INIT_ROI,
                  pixels_threshold=PIXELS_THRESHOLD,
                  area_threshold=AREA_THRESHOLD,
                  smooth_alpha=SMOOTH_ALPHA,
-                 lost_hold_frames=LOST_HOLD_FRAMES):
-        """构造函数：仅保存配置，不接触硬件，便于在主机端做参数检查。"""
+                 lost_hold_frames=LOST_HOLD_FRAMES,
+                 img_width=IMG_WIDTH,
+                 img_height=IMG_HEIGHT):
+        # 配置
         self.green_lab = green_lab
-        self.roi = roi
+        self.init_roi = init_roi
         self.pixels_threshold = pixels_threshold
         self.area_threshold = area_threshold
         self.smooth_alpha = smooth_alpha
         self.lost_hold_frames = lost_hold_frames
+        self.img_width = img_width
+        self.img_height = img_height
 
         # 运行时状态
-        self._fx = None            # 平滑后的 x
-        self._fy = None            # 平滑后的 y
-        self._lost_cnt = 0         # 连续丢失计数
-        self._sensor_ready = False # 摄像头是否已初始化
+        self.cur_roi = init_roi      # 当前搜索区(动态收缩)
+        self._fx = None              # 平滑后的 x
+        self._fy = None              # 平滑后的 y
+        self._fw = 0                 # 上一次宽
+        self._fh = 0                 # 上一次高
+        self._lost_cnt = 0           # 连续丢失计数
+        self._sensor_ready = False
+
+        # LED
+        self._led_det = None
+        if _HAS_LED and USE_LED:
+            try:
+                self._led_det = LED("LED_GREEN")
+            except Exception:
+                self._led_det = None
 
     # ------------------------------------------------------------------ #
     # 摄像头初始化
     # ------------------------------------------------------------------ #
     def init_sensor(self):
-        """初始化 OpenMV 摄像头：(只需在程序开始时调用一次)"""
-        # 1) 复位并设置彩色格式与分辨率
+        """初始化 OpenMV 摄像头，并做开机 LED 指示(只调用一次)。"""
+        # 1) 复位并设置格式/分辨率
         sensor.reset()
-        sensor.set_pixformat(PIXFORMAT)
         sensor.set_framesize(FRAMESIZE)
+        sensor.set_pixformat(PIXFORMAT)
 
-        # 2) 跳过若干帧，等待自动曝光/白平衡收敛
-        sensor.skip_frames(time=SKIP_FRAMES_MS)
+        # 2) 可选：硬件读出窗裁剪(提速/限视场)
+        if READOUT_WINDOW is not None:
+            try:
+                sensor.ioctl(sensor.IOCTL_SET_READOUT_WINDOW, READOUT_WINDOW)
+            except Exception:
+                pass
 
-        # 3) 锁死自动调节，保证不同时刻的成像一致（阈值才能稳定命中）
-        if LOCK_AUTO:
-            sensor.set_auto_gain(False)        # 关闭自动增益
-            sensor.set_auto_whitebal(False)    # 关闭自动白平衡
-            sensor.set_auto_exposure(False)    # 关闭自动曝光
+        # 3) 固定增益/白平衡/曝光(短曝光防糊)
+        try:
+            sensor.set_auto_gain(False, gain_db=GAIN_DB)
+            sensor.set_auto_whitebal(False)
+            sensor.set_auto_exposure(False, exposure_us=EXPOSURE_US)
+        except Exception:
+            sensor.set_auto_gain(False)
+            sensor.set_auto_whitebal(False)
+            sensor.set_auto_exposure(False)
+
+        # 4) 跳帧等稳定
+        try:
+            sensor.skip_frames(time=SKIP_FRAMES_MS)
+        except Exception:
+            pass
+
         self._sensor_ready = True
+
+        # 5) 开机 LED：绿灯闪 3 次表示启动成功
+        if self._led_det is not None:
+            for _ in range(3):
+                self._led_det.on()
+                time.sleep_ms(120)
+                self._led_det.off()
+                time.sleep_ms(120)
+
+    # ------------------------------------------------------------------ #
+    # 取帧(带容错)
+    # ------------------------------------------------------------------ #
+    def get_frame(self):
+        """取一帧；偶发帧超时自动重试，连续失败则重初始化传感器。"""
+        for _ in range(5):
+            try:
+                return sensor.snapshot()
+            except Exception:
+                time.sleep_ms(50)
+        # 连续失败 → 重初始化后重试
+        self.init_sensor()
+        return sensor.snapshot()
+
+    # ------------------------------------------------------------------ #
+    # ROI 工具
+    # ------------------------------------------------------------------ #
+    def _clamp_roi(self, roi):
+        """把 ROI 裁剪到图像范围，避免负坐标/越界。"""
+        x, y, w, h = roi
+        if x < 0:
+            w += x
+            x = 0
+        if y < 0:
+            h += y
+            y = 0
+        if x + w > self.img_width:
+            w = self.img_width - x
+        if y + h > self.img_height:
+            h = self.img_height - y
+        if w < 1:
+            w = 1
+        if h < 1:
+            h = 1
+        return (x, y, w, h)
+
+    def build_found_roi(self, blob):
+        """以光斑为中心向外扩 FOUND_RANGE，得到下一帧的贴身搜索区。"""
+        return self._clamp_roi((
+            blob.x() - FOUND_RANGE_X,
+            blob.y() - FOUND_RANGE_Y,
+            2 * FOUND_RANGE_X + blob.w(),
+            2 * FOUND_RANGE_Y + blob.h(),
+        ))
 
     # ------------------------------------------------------------------ #
     # 单帧检测
     # ------------------------------------------------------------------ #
     def detect(self, img=None):
-        """采一帧(或使用传入帧)并检测绿光。
-
-        参数:
-            img: 可选，已有的 image 对象；为 None 时内部 snapshot 取一帧。
-        返回:
-            (x, y, found)
-            x, y : 像素坐标(整数)
-            found: True=本帧找到目标；False=丢帧保持也用尽，判为丢失
-        """
+        """采一帧(或使用传入帧)并检测绿光，返回 (x, y, w, h, found)。"""
         # 1) 取帧
         if img is None:
-            img = sensor.snapshot()
+            img = self.get_frame()
 
-        # 2) 色块检测：只保留绿色、面积足够大的色块，必要时合并相邻块
+        # 2) 在动态 ROI 内找绿色色块
         blobs = img.find_blobs(
-            [self.green_lab],          # 阈值列表（可放多个阈值）
-            roi=self.roi,              # 搜索区域
-            x_stride=X_STRIDE,         # 横向扫描步长(提速)
-            y_stride=Y_STRIDE,         # 纵向扫描步长(提速)
-            pixels_threshold=self.pixels_threshold,  # 像素数下限
-            area_threshold=self.area_threshold,      # 外接矩形面积下限
-            merge=MERGE,               # 合并相邻色块
-            margin=MERGE_MARGIN,       # 合并间距
+            [self.green_lab],
+            roi=self.cur_roi,
+            x_stride=X_STRIDE,
+            y_stride=Y_STRIDE,
+            pixels_threshold=self.pixels_threshold,
+            area_threshold=self.area_threshold,
+            merge=MERGE,
+            margin=MERGE_MARGIN,
         )
 
-        # 3) 没找到：进入“丢帧保持”，连续丢失超过阈值才判丢失
+        # 3) 丢失：丢帧保持若干帧，否则回全图并报丢失
         if not blobs:
             self._lost_cnt += 1
+            self.cur_roi = self.init_roi
+            if self._led_det is not None:
+                self._led_det.off()
             if self._lost_cnt > self.lost_hold_frames or self._fx is None:
-                return 0, 0, False
-            return int(self._fx), int(self._fy), True
+                return 0, 0, 0, 0, False
+            return int(self._fx), int(self._fy), self._fw, self._fh, True
 
-        # 4) 找到：取面积(像素数)最大的色块作为绿光
+        # 4) 命中：取像素数最大的块，收缩 ROI
         blob = max(blobs, key=lambda b: b.pixels())
         self._lost_cnt = 0
+        self._fw, self._fh = blob.w(), blob.h()
+        self.cur_roi = self.build_found_roi(blob)
+        if self._led_det is not None:
+            self._led_det.on()
 
-        # 5) 坐标平滑(一阶低通 EMA)：首帧直接采用，之后按 alpha 融合
+        # 5) EMA 平滑
         cx, cy = blob.cxf(), blob.cyf()
         if self._fx is None:
             self._fx, self._fy = cx, cy
@@ -162,15 +257,14 @@ class GreenLight(object):
             self._fx = a * cx + (1.0 - a) * self._fx
             self._fy = a * cy + (1.0 - a) * self._fy
 
-        # 6) 返回整数像素坐标
-        return int(self._fx), int(self._fy), True
+        return int(self._fx), int(self._fy), self._fw, self._fh, True
 
     # ------------------------------------------------------------------ #
-    # 便捷接口：取原始(未平滑)色块，供调试/画框使用
+    # 调试接口
     # ------------------------------------------------------------------ #
     def find_best_blob(self, img):
         """返回当前帧面积最大的绿光色块对象(可能为 None)，便于画框/调试。"""
-        blobs = img.find_blobs([self.green_lab], roi=self.roi,
+        blobs = img.find_blobs([self.green_lab], roi=self.cur_roi,
                                pixels_threshold=self.pixels_threshold,
                                area_threshold=self.area_threshold,
                                merge=MERGE, margin=MERGE_MARGIN)
@@ -179,7 +273,10 @@ class GreenLight(object):
         return max(blobs, key=lambda b: b.pixels())
 
     def reset(self):
-        """清空平滑状态与丢失计数(重新捕获目标时调用)。"""
+        """清空平滑/丢失状态与 ROI(重新捕获目标时调用)。"""
         self._fx = None
         self._fy = None
+        self._fw = 0
+        self._fh = 0
         self._lost_cnt = 0
+        self.cur_roi = self.init_roi
