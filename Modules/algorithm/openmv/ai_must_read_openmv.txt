@@ -1,0 +1,4 @@
+本项目为openmv使用，但是由于openmv是python驱动的，所以用py写成，而把openmv的算法库放在stm用的库里面是因为项目的便利性，但是我不清楚把py放在stm里会不会引起stm的编译报错
+下面是实现：
+camara_ai将实现将拍摄到的画面运算成坐标（目标靶是一个绿光，要做的就是保证稳定高效地识别到绿光并把它转换成坐标）
+uart_ai将实现把得到的绿光坐标用串口发送给stm32板子，stm32用"D:\worka\dart_final_work\Bsp\usart"这个bsp库接收openmv发出的信号

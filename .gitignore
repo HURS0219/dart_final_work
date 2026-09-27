@@ -1,0 +1,18 @@
+# Python 缓存(OpenMV 模块在本仓库中以 .py 形式存放)
+__pycache__/
+*.pyc
+*.pyo
+
+# 构建产物
+build/
+Debug/
+cmake-build-*/
+*.o
+*.elf
+*.hex
+*.bin
+*.map
+
+# 编辑器
+.vscode/
+.idea/
