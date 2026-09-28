@@ -21,3 +21,12 @@
 - `app/vision.c` 使用 `DART_USART_OPENMV(&huart3)` 需 `#include "usart.h"`（否则 `huart3` 未声明）。
 - 头文件统一 `#pragma once`，勿再写 `#endif`（曾误加导致预处理错误）。
 - F4 可用串口：`huart1/3/6`；SPI：`hspi1`(BMI088) / `hspi2`(留给 OpenMV)。
+
+## 2026-09-28　分支 adrc（自抗扰稳滚）
+- 新增 `Modules/algorithm/adrc_ai/`（纯算法）: 线性二阶 ADRC（ESO + PD），
+  对象 `y''=f+b0·u`；`u=(wc²(ref-z1)-2ζwc·z2 - z3)/b0`，ESO 估计 `z3≈总扰动`。
+- `guidance.c`: `ROLL_CTRL_MODE`=2 时 roll 走 ADRC（measure=roll, ref=0）。
+- `dart_final_cfg.h`: `ROLL_CTRL_MODE`（0=PID,1=SMC,2=ADRC; 本分支=2）。
+- 主机测试 `Debug/test_adrc.c`（gcc，不入库）验证收敛。
+- 参数整定法: 先 `wc`（闭环快慢）→ 再 `wo≈3~5·wc`; `b0` 符号/大小最关键。
+- 分支实验用，不合并 main。

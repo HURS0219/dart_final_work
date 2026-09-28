@@ -69,6 +69,15 @@
 #define ROLL_KD (0.15f)
 #define ROLL_CMD_LIMIT (1.0f) /* 输出(mix.roll)限幅 ± */
 
+/*
+ * 滚转控制器选择: 0 = PID, 1 = SMC(smc 分支), 2 = ADRC(adrc 分支)。
+ * 本分支(adrc)默认 2。
+ * ⚠ 为“后期三实验 + main 合并”预留; 启用多控制器会明显增加复杂度与出错面,
+ *   前期请固定一种。ADRC 参数见 Modules/algorithm/adrc_ai/adrc_cfg.h。
+ */
+#define ROLL_CTRL_MODE 2
+
+
 /* ===================== 状态机 / 失效判定 ===================== */
 
 /*
