@@ -83,19 +83,29 @@ Subscriber_t *SubRegister(char *name, uint8_t data_len)
 /* 如果队列为空,会返回0;成功获取数据,返回1;后续可以做更多的修改,比如剩余消息数目等 */
 uint8_t SubGetMessage(Subscriber_t *sub, void *data_ptr)
 {
+    if (sub == NULL || data_ptr == NULL)
+    {
+        return 0;
+    }
     if (sub->temp_size == 0)
     {
         return 0;
     }
     memcpy(data_ptr, sub->queue[sub->front_idx], sub->data_len);
-    sub->front_idx = (sub->front_idx++) % QUEUE_SIZE; // 队列头索引增加
-    sub->temp_size--;                                 // pop一个数据,长度减1
+    sub->front_idx = (sub->front_idx + 1) % QUEUE_SIZE; // 队列头索引增加(修正: 原为 front_idx++ 写法错误)
+    sub->temp_size--;                                   // pop一个数据,长度减1
     return 1;
 }
 
 uint8_t PubPushMessage(Publisher_t *pub, void *data_ptr)
 {
-    static Subscriber_t *iter;
+    Subscriber_t *iter;     // 修正: 原为 static, 多任务下不可重入; 改为局部
+    uint8_t count = 0;      // 实际推送的订阅者数
+
+    if (pub == NULL || data_ptr == NULL)
+    {
+        return 0;
+    }
     iter = pub->first_subs; // iter作为订阅者指针,遍历订阅该话题的所有订阅者;如果为空说明遍历结束
     // 遍历订阅了当前话题的所有订阅者,依次填入最新消息
     while (iter)
@@ -110,8 +120,9 @@ uint8_t PubPushMessage(Publisher_t *pub, void *data_ptr)
         memcpy(iter->queue[iter->back_idx], data_ptr, pub->data_len);
         iter->back_idx = (iter->back_idx + 1) % QUEUE_SIZE; // 队列尾部前移
         iter->temp_size++;                                  // 入队,size+1
+        count++;
 
         iter = iter->next_subs_queue; // 访问下一个订阅者
     }
-    return 1;
+    return count; // 返回实际推送的订阅者数(修正: 原恒返回 1)
 }
