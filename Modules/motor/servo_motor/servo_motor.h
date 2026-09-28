@@ -23,19 +23,12 @@
 #define SERVO_MOTOR_H
 
 #include "bsp_pwm.h"
+#include "servo_motor_cfg.h"  // 可调默认参数(现场调参入口, 见该文件)
 #include "stdint.h"
 
 #define SERVO_MOTOR_CNT 4  // 最多同时注册的舵机实例数
 
-/* 调零安全窗口: 当前机械偏角(相对中位)必须在 ±该值(deg)内才允许调零 */
-#define SERVO_ZERO_WINDOW_DEG 30.0f
-
-/* 缺省信号参数: 未在 config 中显式指定时自动回落 */
-#define SERVO_CENTER_US_DEFAULT 1500.0f  // 机械 0° 对应脉宽
-#define SERVO_HALF_US_DEFAULT 1000.0f    // 中位到行程端对应脉宽
-#define SERVO_HALF_DEG_DEFAULT 139.5f    // 行程一半(279° 总行程)
-#define SERVO_PULSE_MIN_DEFAULT 500.0f   // 脉宽硬下限
-#define SERVO_PULSE_MAX_DEFAULT 2500.0f  // 脉宽硬上限
+/* 说明: 信号/标定默认值已迁至 servo_motor_cfg.h 的 SERVO_CFG_* 宏, 便于集中调参 */
 
 /**
  * @brief 舵机标定/初始化配置
@@ -118,7 +111,7 @@ void ServoTask(void);
 
 /**
  * @brief 把"当前位置"记为逻辑 0°(调零; 物理不动)
- * @note  仅当 zero_enable 启用, 且当前机械偏角落在中位 ±SERVO_ZERO_WINDOW_DEG 内才执行
+ * @note  仅当 zero_enable 启用, 且当前机械偏角落在中位 ±SERVO_CFG_ZERO_WINDOW_DEG 内才执行
  * @return 1 成功; 0 未启用 / 超窗口 / 无效
  */
 uint8_t ServoZero(ServoInstance *servo);

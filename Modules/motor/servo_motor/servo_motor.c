@@ -125,14 +125,14 @@ ServoInstance *ServoInit(Servo_Init_Config_s *config) {
   servo->cfg = *config;
 
   /* 缺省/非法参数回落: half_deg 必须 >0(后面要做除数), 脉宽上界须大于下界 */
-  if (servo->cfg.center_us <= 0.0f) servo->cfg.center_us = SERVO_CENTER_US_DEFAULT;
-  if (servo->cfg.half_us <= 0.0f) servo->cfg.half_us = SERVO_HALF_US_DEFAULT;
-  if (servo->cfg.half_deg <= 0.0f) servo->cfg.half_deg = SERVO_HALF_DEG_DEFAULT;
+  if (servo->cfg.center_us <= 0.0f) servo->cfg.center_us = SERVO_CFG_CENTER_US;
+  if (servo->cfg.half_us <= 0.0f) servo->cfg.half_us = SERVO_CFG_HALF_US;
+  if (servo->cfg.half_deg <= 0.0f) servo->cfg.half_deg = SERVO_CFG_HALF_DEG;
   if (servo->cfg.pulse_max_us <= servo->cfg.pulse_min_us) {
-    servo->cfg.pulse_min_us = SERVO_PULSE_MIN_DEFAULT;
-    servo->cfg.pulse_max_us = SERVO_PULSE_MAX_DEFAULT;
+    servo->cfg.pulse_min_us = SERVO_CFG_PULSE_MIN_US;
+    servo->cfg.pulse_max_us = SERVO_CFG_PULSE_MAX_US;
   }
-  if (servo->cfg.scale <= 0.0f) servo->cfg.scale = 1.0f;
+  if (servo->cfg.scale <= 0.0f) servo->cfg.scale = SERVO_CFG_SCALE;
 
   servo->pwm = PWMRegister(&servo->cfg.pwm);  // 底层注册 PWM 通道
   servo->last_time_s = DWT_GetTimeline_s();
@@ -215,7 +215,7 @@ void ServoTask(void) {
  * @return 1 成功; 0 未启用调零/超窗口/无效
  * @note  两道门槛:
  *        1) zero_enable 必须为 1(可用可不用, 由 config 决定);
- *        2) 当前机械偏角 |applied| 必须 <= SERVO_ZERO_WINDOW_DEG, 防止在极端位置误调零。
+ *        2) 当前机械偏角 |applied| 必须 <= SERVO_CFG_ZERO_WINDOW_DEG, 防止在极端位置误调零。
  *        通过后令 trim 抵消当前偏角, 使 out=0 时机械位置不变, 逻辑角归零 (reverse 在 trim 之后)。
  */
 uint8_t ServoZero(ServoInstance *servo) {
@@ -225,7 +225,7 @@ uint8_t ServoZero(ServoInstance *servo) {
   if (!servo->cfg.zero_enable) return 0;  // 调零功能未启用
 
   applied = AppliedOf(servo);
-  if (applied < -SERVO_ZERO_WINDOW_DEG || applied > SERVO_ZERO_WINDOW_DEG) return 0;  // 超出调零窗口
+  if (applied < -SERVO_CFG_ZERO_WINDOW_DEG || applied > SERVO_CFG_ZERO_WINDOW_DEG) return 0;  // 超出调零窗口
 
   /* 让逻辑 0° 对应当前位置: out=0 时 applied 不变 -> trim = ±applied (reverse 在 trim 之后) */
   servo->cfg.trim_deg = servo->cfg.reverse ? -applied : applied;
