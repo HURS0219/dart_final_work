@@ -42,7 +42,10 @@ CSV_ENABLE = True            # 结束后是否收飞行数据
 def main():
     # 1) 串口 + 等待 STM32 指定轴
     link = UartLink(uart_id=UART_ID, baudrate=UART_BAUDRATE)
-    axis = link.wait_axis()
+    axis = link.wait_axis()          # 必须消费该握手字节(STM32 指定本相机负责的制导轴)
+    if axis is None:
+        axis = "yaw"                 # 兜底: 未收到选择时默认 yaw
+    print("[main] guidance axis:", axis)
 
     # 2) 初始化摄像头，回就绪
     detector = GreenLight()
@@ -54,6 +57,8 @@ def main():
     link.wait_wake()
     sensor.sleep(False)
     mode = link.wait_mode()
+    if mode is None:
+        mode = "normal"              # 兜底
 
     # 4) 录像初始化(可选)
     rec = None

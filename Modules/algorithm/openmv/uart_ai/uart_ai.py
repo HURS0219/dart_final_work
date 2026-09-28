@@ -29,6 +29,8 @@ OpenMV -> STM32:
 ================================================================================
 """
 
+import time
+
 from pyb import UART
 
 
@@ -103,45 +105,47 @@ class UartLink(object):
         if self.uart.any():
             b = self.uart.read(1)
             if b:
-                return ord(b)
+                return b[0]
         return None
 
     def wait_byte(self, codes, timeout_ms=None):
-        """等待 codes 中的某个字节；超时返回 None。"""
-        t0 = 0
+        """等待 codes 中的某个字节。
+
+        timeout_ms:
+            None -> 一直等待(返回匹配字节);
+            数值 -> 超过该毫秒数未匹配则返回 None。
+        轮询间隔 1ms, 避免忙等占满 CPU。
+        """
+        t0 = time.ticks_ms()
         while True:
             b = self.read_byte()
             if b is not None and b in codes:
                 return b
-            if timeout_ms is not None and b is None:
-                # 简易超时(依赖调用方传入合理的 timeout_ms)
-                t0 += 1
-                if t0 > timeout_ms:
-                    return None
+            if timeout_ms is not None and time.ticks_diff(time.ticks_ms(), t0) >= timeout_ms:
+                return None
+            time.sleep_ms(1)
 
-    def wait_axis(self):
-        """等待 STM32 指定制导轴，返回 'yaw' 或 'pitch'。"""
-        while True:
-            b = self.read_byte()
-            if b == CMD_AXIS_YAW:
-                return 'yaw'
-            if b == CMD_AXIS_PITCH:
-                return 'pitch'
+    def wait_axis(self, timeout_ms=None):
+        """等待 STM32 指定制导轴，返回 'yaw' / 'pitch'，超时返回 None。"""
+        b = self.wait_byte((CMD_AXIS_YAW, CMD_AXIS_PITCH), timeout_ms)
+        if b == CMD_AXIS_YAW:
+            return 'yaw'
+        if b == CMD_AXIS_PITCH:
+            return 'pitch'
+        return None
 
-    def wait_wake(self):
-        """等待 0xAB 唤醒命令。"""
-        while True:
-            if self.read_byte() == CMD_WAKE:
-                return True
+    def wait_wake(self, timeout_ms=None):
+        """等待 0xAB 唤醒命令，收到返回 True，超时返回 False。"""
+        return self.wait_byte((CMD_WAKE,), timeout_ms) is not None
 
-    def wait_mode(self):
-        """等待模式选择，返回 'normal' 或 'competition'。"""
-        while True:
-            b = self.read_byte()
-            if b == CMD_MODE_NORMAL:
-                return 'normal'
-            if b == CMD_MODE_COMPETITION:
-                return 'competition'
+    def wait_mode(self, timeout_ms=None):
+        """等待模式选择，返回 'normal' / 'competition'，超时返回 None。"""
+        b = self.wait_byte((CMD_MODE_NORMAL, CMD_MODE_COMPETITION), timeout_ms)
+        if b == CMD_MODE_NORMAL:
+            return 'normal'
+        if b == CMD_MODE_COMPETITION:
+            return 'competition'
+        return None
 
     def deinit(self):
         try:
