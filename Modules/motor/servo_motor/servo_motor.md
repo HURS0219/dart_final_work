@@ -94,27 +94,44 @@ typedef struct {
 ## 6. 外部接口
 
 ```c
-ServoInstance *ServoInit(Servo_Init_Config_s *config);   // 注册舵机
-void ServoSetAngle(ServoInstance *servo, float angle);   // 设逻辑角(deg)
-void ServoSetPulseUs(ServoInstance *servo, float pulse_us);// 直接给脉宽(us)
-void ServoTask(void);                                    // 周期任务(速率限幅)
+/* ---------- 注册 / 角度 / 周期任务 ---------- */
+ServoInstance *ServoInit(Servo_Init_Config_s *config);      // 注册舵机
+void ServoSetAngle(ServoInstance *servo, float angle);      // 设逻辑角(deg)
+void ServoSetPulseUs(ServoInstance *servo, float pulse_us); // 直接给脉宽(us, 自动限幅)
+void ServoTask(void);                                       // 周期任务: 限速推进 + 输出(必须周期调用)
 
-void ServoSetNeutral(ServoInstance*, float center_deg);  // 逻辑0°对应机械角
-void ServoSetTrim(ServoInstance*, float trim_deg);
-void ServoSetScale(ServoInstance*, float scale);
-void ServoSetReverse(ServoInstance*, int8_t reverse);
-void ServoSetRateLimit(ServoInstance*, float dps);
-void ServoZero(ServoInstance*);                          // 当前位置记为逻辑0°
-void ServoResetCal(ServoInstance*);                      // 清标定
+/* ---------- 标定 ---------- */
+void  ServoSetNeutral(ServoInstance*, float center_deg);    // 逻辑0°对应机械角
+void  ServoSetTrim(ServoInstance*, float trim_deg);         // 中性微调
+void  ServoSetScale(ServoInstance*, float scale);           // 比例
+void  ServoSetReverse(ServoInstance*, int8_t reverse);      // 方向 +1 / -1
+void  ServoSetRange(ServoInstance*, float range_deg);       // 机械量程(180/270/279...)
+void  ServoSetPulseRange(ServoInstance*, float min_us, float max_us); // 脉宽两端
+void  ServoSetLimit(ServoInstance*, float limit_deg);       // 逻辑角对称限位 ±limit_deg
+void  ServoResetCal(ServoInstance*);                        // 清标定(回默认)
 
-void  ServoEnable(ServoInstance*);                       // 启动输出
-void  ServoDisable(ServoInstance*);                      // 停止输出
-void  ServoUnload(ServoInstance*);                       // 总线: 失力
-void  ServoRequestAngle(ServoInstance*);                 // 总线: 请求位置回读
-float ServoGetAngle(ServoInstance*);                     // 逻辑角
-float ServoGetRawDeg(ServoInstance*);                    // 机械角
-float ServoGetPulseUs(ServoInstance*);                   // 脉宽
-uint16_t ServoGetRecvAngle(ServoInstance*);              // 总线回读角
+/* ---------- 调零 (对外接口) ---------- */
+uint8_t ServoZero(ServoInstance*);                          // 把"当前位置"记为逻辑 0°(脉宽不变, 物理不动), 成功则写入 Flash; 1=成功 0=被窗口拒绝
+uint8_t ServoZeroAll(void);                                 // 所有已注册实例统一调零并写 Flash; 返回成功个数
+
+/* ---------- 掉电保存 ---------- */
+void  ServoSaveCalib(void);                                 // 把所有实例标定写入 Flash
+void  ServoLoadCalib(void);                                 // 上电后调用: 从 Flash 读回标定(有效则覆盖源码默认值)
+
+/* ---------- 限速 (对外接口) ---------- */
+void  ServoSetRateLimit(ServoInstance*, float dps);         // 设限速 deg/s (<=0 表示不限速/立即到位)
+float ServoGetRateLimit(ServoInstance*);                    // 读回限速值
+
+/* ---------- 使能 / 失能 / 查询 ---------- */
+void  ServoEnable(ServoInstance*);                          // 启动输出
+void  ServoDisable(ServoInstance*);                         // 停止输出
+void  ServoUnload(ServoInstance*);                          // 总线: 失力
+void  ServoRequestAngle(ServoInstance*);                    // 总线: 请求位置回读
+float     ServoGetAngle(ServoInstance*);                    // 逻辑角
+float     ServoGetRawDeg(ServoInstance*);                   // 机械角
+float     ServoGetPulseUs(ServoInstance*);                  // 脉宽
+uint16_t  ServoGetRecvAngle(ServoInstance*);                // 总线回读角
+void      ServoGetCalib(ServoInstance*, Servo_Calib_Config_s*); // 标定快照(封装, app 不直接访问内部)
 ```
 
 ## 7. 使用示例
@@ -178,6 +195,7 @@ uint16_t a = ServoGetRecvAngle(s);  // 回读角(需周期收到应答帧)
 ## 8. 标定步骤（两步法）
 
 1. **调零**：手动/上位机把舵面拖到物理中立（或期望的逻辑 0° 位置），调用 `ServoZero()` —— 把当前位置记为逻辑 0°（改 `center_deg`，脉宽不变，舵机不跳变）。
+   - **安全窗口**：仅当当前**机械角**落在 **机械中位 `range_deg/2`（舵机物理 0°）±`SERVO_ZERO_WINDOW_DEG`（默认 30°）** 之内才允许调零；否则 `ServoZero()` 返回 0、**拒绝且不写 Flash**，避免在极端/饱和位置误调零。`ServoZeroAll()` 返回成功个数，全被拒绝则不落盘。
 2. **定比例**：把舵面拖到某个已知机械角标记（如物理 90°），按 `scale = 期望机械角差 / 当前逻辑角差` 调整 `ServoSetScale()`；对 180° 型/270° 型一定要把 `range_deg` 设对。
 
 > 标定结果建议由 app 层做掉电保存（module 层不做持久化）。
@@ -189,3 +207,5 @@ uint16_t a = ServoGetRecvAngle(s);  // 回读角(需周期收到应答帧)
 - **限速**：启用 `rate_limit_dps` 后**必须在周期任务中调用 `ServoTask()`**，否则舵机不会动。
 - **无反馈**：PWM 舵机无位置/负载反馈，`ServoGetAngle()` 返回的是指令角而非实测角；防堵转需靠软限位 + 外部电流检测。
 - **总线舵机**：`DecodeServo` 在中断上下文执行，只做轻量解析；角度单位为协议单位，`servo_id` 与帧内 ID 需一致。
+- **掉电保存**：`ServoZero` / `ServoSaveCalib` 会擦写 `SERVO_CALIB_FLASH_ADDR`（F407 默认扇区 11 = `0x080E0000`）。上电调用一次 `ServoLoadCalib()`，若 Flash 有有效标定（magic+CRC）则覆盖源码默认值；擦除前会清 Flash 错误标志。换 MCU 记得改 `SERVO_CALIB_FLASH_ADDR`。
+- **限位**：`limit_deg` 是对 **逻辑角** 的对称限幅（±limit_deg），逻辑 0° 即 `center_deg`（调零后的零点），所以限幅是相对零点生效。
