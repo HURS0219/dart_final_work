@@ -69,6 +69,18 @@
 #define ROLL_KD (0.15f)
 #define ROLL_CMD_LIMIT (1.0f) /* 输出(mix.roll)限幅 ± */
 
+/* ===================== 旋转解耦 (roll_dec 分支) =====================
+ * 路线二(见 dart_final/roll_dec.md): 弹体自由滚转, 用滚转角 γ 把"空间指令"经
+ * 旋转矩阵 R(γ) 变换到弹体坐标系; 舵面随弹体一起滚, 由算法补偿, 使空间控制方向正确。
+ *   弹体指令 yaw_body   =  ay_space*cosγ + az_space*sinγ
+ *   弹体指令 pitch_body = -ay_space*sinγ + az_space*cosγ
+ * 启用后**不再做滚转稳定**(允许自旋)。
+ */
+#define GUID_ROLL_DEC_ENABLE 1      /* 1=启用旋转解耦(允许自旋); 0=传统"稳滚"(仅控 yaw) */
+#define GUID_ROLL_SIGN (+1.0f)      /* γ 符号: 与陀螺/坐标定义一致; 装反则取 -1 */
+#define GUID_ROLL_OFFSET_DEG (0.0f) /* γ 机械零点偏置(deg): 陀螺零位与真实机体系差 */
+
+
 /* ===================== 状态机 / 失效判定 ===================== */
 
 /*

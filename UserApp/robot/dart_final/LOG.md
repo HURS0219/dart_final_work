@@ -21,3 +21,10 @@
 - `app/vision.c` 使用 `DART_USART_OPENMV(&huart3)` 需 `#include "usart.h"`（否则 `huart3` 未声明）。
 - 头文件统一 `#pragma once`，勿再写 `#endif`（曾误加导致预处理错误）。
 - F4 可用串口：`huart1/3/6`；SPI：`hspi1`(BMI088) / `hspi2`(留给 OpenMV)。
+
+## 2026-09-28　分支 roll_dec（旋转解耦·路线二）
+- 定义与方案见本分支 `roll_dec.md`（路线一/二对比；本分支选路线二：允许自旋, 用 γ 旋转空间指令到体轴）。
+- `app/guidance.c`：新增 `#if GUID_ROLL_DEC_ENABLE` 分支——用 `attitude.roll_deg(γ)` 做 `R(γ)` 变换，
+  体轴 `yaw=ay·cosγ`, `pitch=-ay·sinγ`, 不再稳滚；关闭则退回传统“仅控 yaw + roll PID”。
+- `dart_final_cfg.h`：新增 `GUID_ROLL_DEC_ENABLE / GUID_ROLL_SIGN / GUID_ROLL_OFFSET_DEG`。
+- 分支已推 origin（实验用，不合并）。
