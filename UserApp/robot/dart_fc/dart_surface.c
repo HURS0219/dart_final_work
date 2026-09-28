@@ -9,7 +9,6 @@
 
 #include "dart_cfg.h"
 #include "dart_ptk7350.h"
-#include "servo_mixer.h"
 #include "tim.h"
 
 #ifndef M_PI
@@ -177,9 +176,11 @@ static void DartSurfaceComputeTarget(void)
 
     switch (s_state) {
     case SURFACE_ACTIVE: {
-        float u[DART_SURFACE_CNT];
-        servo_mixer_apply(&s_mix, u);   /* mixer 已配置为 neutral=0, max=1 -> u 为 -1..1 */
-        for (i = 0; i < DART_SURFACE_CNT; i++) s_target[i] = u[i] * c->servo_max_deg[i];
+        /* 内联 X 型解耦矩阵(原 servo_mixer_apply, neutral=0/max=1): u = Σ mix[i][j]*cmd[j] */
+        for (i = 0; i < DART_SURFACE_CNT; i++) {
+            float u = c->mix[i][0] * s_mix.pitch + c->mix[i][1] * s_mix.yaw + c->mix[i][2] * s_mix.roll;
+            s_target[i] = u * c->servo_max_deg[i];
+        }
         break;
     }
     case SURFACE_TEST:

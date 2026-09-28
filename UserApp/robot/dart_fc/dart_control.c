@@ -16,13 +16,12 @@ static void set_neutral(control_out_t *out)
     out->mix.pitch = 0.0f;
     out->mix.yaw = 0.0f;
     out->mix.roll = 0.0f;
-    servo_mixer_apply(&out->mix, out->servo_deg);
 }
 
 void control_init(void)
 {
-    /* 混控矩阵/中立/量程由 DartCfg 统一管理 (DartCfgApply 会初始化 mixer)。
-     * 这里再 Apply 一次, 保证即使单独调用 control_init 也已就绪。 */
+    /* 混控矩阵/中立/量程由 DartCfg 统一管理(dart_surface 直接读取 DartCfg()->mix)。
+     * 这里 Apply 一次, 保证即使单独调用 control_init 也已就绪。 */
     DartCfgApply();
 }
 
@@ -76,7 +75,6 @@ static void step_competition(const control_in_t *in, control_out_t *out)
     out->mix.pitch = clampf(pitch_cmd, -CFG_MANUAL_CMD_LIMIT, CFG_MANUAL_CMD_LIMIT);
     out->mix.yaw   = clampf(yaw_cmd,   -CFG_MANUAL_CMD_LIMIT, CFG_MANUAL_CMD_LIMIT);
     out->mix.roll  = clampf(roll_cmd,  -CFG_MANUAL_CMD_LIMIT, CFG_MANUAL_CMD_LIMIT);
-    servo_mixer_apply(&out->mix, out->servo_deg);
 }
 
 static void step_decoupled_manual(const control_in_t *in, control_out_t *out)
@@ -100,12 +98,10 @@ static void step_decoupled_manual(const control_in_t *in, control_out_t *out)
     out->mix.pitch = clampf(pitch_cmd, -CFG_MANUAL_CMD_LIMIT, CFG_MANUAL_CMD_LIMIT);
     out->mix.yaw   = clampf(yaw_cmd,   -CFG_MANUAL_CMD_LIMIT, CFG_MANUAL_CMD_LIMIT);
     out->mix.roll  = clampf(roll_cmd,  -CFG_MANUAL_CMD_LIMIT, CFG_MANUAL_CMD_LIMIT);
-    servo_mixer_apply(&out->mix, out->servo_deg);
 }
 
 static void step_full_manual(const control_in_t *in, control_out_t *out)
 {
-    servo_mixer_full_manual(in->sticks, CFG_FM_GAIN_DEG, out->servo_deg);
     out->mix.pitch = in->sticks[1];
     out->mix.yaw   = in->sticks[2];
     out->mix.roll  = in->sticks[3];

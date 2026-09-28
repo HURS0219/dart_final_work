@@ -16,7 +16,7 @@
  *     pulse_min/max_us 为"脉宽"硬限幅(越程可能导致舵机翻转/损坏)。
  *  3. 调零(ServoZero)把当前位置记为逻辑 0°, 需 zero_enable 使能且当前偏角在窗口内。
  *  4. 本模块只做"单路驱动 + 标定 + 速率限幅 + 调零";
- *     四舵面混控/状态机由应用层或 servo_mixer 负责;
+ *     四舵面混控由 Modules/algorithm/servo_mix_ai 负责;
  *     参数掉电保存请使用 bsp_flash 的 flash_store_save/load。
  */
 #ifndef SERVO_MOTOR_H

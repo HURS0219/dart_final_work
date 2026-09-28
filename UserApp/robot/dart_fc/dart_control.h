@@ -5,7 +5,7 @@
 #include "dart_mode.h"
 #include "dart_attitude.h"
 #include "dart_guidance.h"
-#include "servo_mixer.h"
+#include "dart_surface.h"  /* mix_cmd_t (原 servo_mixer.h) */
 
 #ifdef __cplusplus
 extern "C" {
@@ -23,8 +23,7 @@ typedef struct {
 } control_in_t;
 
 typedef struct {
-    float     servo_deg[4];
-    mix_cmd_t mix;
+    mix_cmd_t mix;   /* 归一化混控指令(-1..1); 舵面角由 dart_surface 统一解算 */
     int       failsafe;
 } control_out_t;
 

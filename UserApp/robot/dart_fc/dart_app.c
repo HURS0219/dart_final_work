@@ -2,7 +2,7 @@
  * dart_app.c — 制导飞镖飞控 (dart_fc) 应用层
  *
  * 分层:
- *   Module 层: IMU(ins_task) / 舵机解耦(servo_mixer)
+ *   Module 层: IMU(ins_task)
  *   App 层(本目录):
  *     dart_ptk7350  自研 PTK7350 底层 PWM 驱动 (隔离, 不改 Modules)
  *     dart_cfg      运行时参数 + 掉电保存

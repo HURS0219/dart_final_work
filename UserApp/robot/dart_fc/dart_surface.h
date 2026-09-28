@@ -24,6 +24,13 @@ extern "C" {
 
 #define DART_SURFACE_CNT 4
 
+/* 归一化混控指令(-1..1); 原由已删除的 Modules/servo_mixer 提供, 现本地定义 */
+typedef struct {
+    float pitch;
+    float yaw;
+    float roll;
+} mix_cmd_t;
+
 typedef enum {
     SURFACE_BOOT = 0,
     SURFACE_NEUTRAL,

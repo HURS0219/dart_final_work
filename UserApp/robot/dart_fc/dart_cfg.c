@@ -8,7 +8,6 @@
 #include "bsp_flash.h"
 #include "dart_config.h"
 #include "main.h"
-#include "servo_mixer.h"
 
 #define DART_CFG_BANK_A ADDR_FLASH_SECTOR_10  /* 0x080C0000 */
 #define DART_CFG_BANK_B ADDR_FLASH_SECTOR_11  /* 0x080E0000 */
@@ -80,8 +79,7 @@ static void DartCfgDefaults(DartCfg_t *c)
 
 void DartCfgApply(void)
 {
-    /* 混控矩阵: 让 mixer 输出 -1..1 的归一化控制量, 各舵面量程/标定在 DartSurface 处理 */
-    servo_mixer_init(s_cfg.mix, 0.0f, 1.0f);
+    /* 混控矩阵由 dart_surface 直接读取 DartCfg()->mix, 无需再推给外部 mixer */
     s_version++;
 }
 
