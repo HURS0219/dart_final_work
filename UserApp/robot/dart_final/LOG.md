@@ -21,3 +21,11 @@
 - `app/vision.c` 使用 `DART_USART_OPENMV(&huart3)` 需 `#include "usart.h"`（否则 `huart3` 未声明）。
 - 头文件统一 `#pragma once`，勿再写 `#endif`（曾误加导致预处理错误）。
 - F4 可用串口：`huart1/3/6`；SPI：`hspi1`(BMI088) / `hspi2`(留给 OpenMV)。
+
+## 2026-09-28　分支 smc（滑模稳滚）
+- 新增 `Modules/algorithm/smc_ai/`（纯算法）: 一阶滑模面 `s=c·e+ė` + 边界层趋近律 `u=-k·sat(s/phi)`。
+- `guidance.c`: 用 `ROLL_CTRL_MODE` 在 PID / SMC 间切换（本分支默认 SMC）；roll 通道接入。
+- `dart_final_cfg.h`: 新增 `ROLL_CTRL_MODE`（1=SMC）。
+- **坑**: 滑模符号约定——`u=-k·sat(s)` 要求 `e=被测-期望`（output-desired），
+  最初误用 `e=期望-被测` 导致发散；已改为 `e=roll_deg, e_dot=gx_dps`。
+- 主机测试 `Debug/test_smc.c`（gcc，不入库）验证收敛。分支实验用，不合并 main。

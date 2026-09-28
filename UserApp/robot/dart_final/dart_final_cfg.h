@@ -69,6 +69,15 @@
 #define ROLL_KD (0.15f)
 #define ROLL_CMD_LIMIT (1.0f) /* 输出(mix.roll)限幅 ± */
 
+/*
+ * 滚转控制器选择: 0 = PID(Modules/algorithm/controller), 1 = SMC(smc_ai)。
+ * 本分支(smc)默认 1。
+ * ⚠ 该开关是为“后期三实验 + main 合并”预留; 启用多控制器会明显增加复杂度与出错面,
+ *   前期请固定一种。SMC 参数见 Modules/algorithm/smc_ai/smc_cfg.h。
+ */
+#define ROLL_CTRL_MODE 1
+
+
 /* ===================== 状态机 / 失效判定 ===================== */
 
 /*
