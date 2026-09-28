@@ -1,0 +1,6 @@
+先读"D:\worka\dart_final_work\agent_must_read_dart.txt"
+这是制导飞镖舵机控制的最终解决方案：（严格按照"D:\worka\dart_final_work\UserApp\APP层应用编写指引.md"
+"D:\worka\dart_final_work\UserApp\application.md"的要求编写userapp端）
+将"D:\worka\dart_final_work\UserApp\robot\dart_servo_v0.2"里的舵机驱动项目写在"D:\worka\dart_final_work\Modules\motor\servo_motor"里，要求改写"D:\worka\dart_final_work\Modules\motor\servo_motor\servo_motor.md"
+"D:\worka\dart_final_work\Modules\motor\servo_motor\servo_motor.c"
+"D:\worka\dart_final_work\Modules\motor\servo_motor\servo_motor.h"，这些文件（严格按照同类module文件的标准，结构+注释+规范），把原项目像屎一样的一团的舵机驱动直接抽提出来，对比这个servo motor合并重写，尽可能查阅180度版本的ptk7350舵机的网上资料
