@@ -8,7 +8,8 @@
  * 命令通道: 同时支持
  *   1) J-Link RTT (Channel 0 输入框发命令);
  *   2) USB-CDC 虚拟串口(插了板载 USB -> COM 口)。
- * ASCII 行协议(以 \r 或 \n 结尾), 命令:
+ *
+ * ASCII 行协议(以 \r 或 \n 结尾, 命令大写不敏感), 命令:
  *   PING                 -> PONG
  *   A,<deg> / ANG,<deg>  设逻辑角(deg)
  *   U,<us>               直接设脉宽(us)
@@ -23,6 +24,10 @@
  *   SAVE / LOAD          立即写 Flash / 从 Flash 读回(双 Bank)
  *   E / X                使能 / 失能(PWM 输出)
  *   I 或 ?               回读状态
+ *
+ * 状态回读格式:
+ *   OK a=<逻辑角> tgt=<目标角> pulse=<脉宽> | cu=<中位> hu=<半脉宽> hd=<半行程> \
+ *      s=<增益> t=<trim> d=<方向> lim=<限位> r=<限速> z=<调零开关>
  */
 #include "robot.h"
 
@@ -45,25 +50,28 @@
 
 RobotInstance *robot = NULL;
 
-static ServoInstance *g_servo = NULL;
-static uint8_t *g_usb_rx = NULL;
+static ServoInstance *g_servo = NULL;  // 唯一测试舵机
+static uint8_t *g_usb_rx = NULL;       // USB-CDC 接收缓冲
 
-/* 掉电保存: 双 Bank 两扇区 */
+/* 掉电保存: 使用 bsp_flash 的双 Bank(两个扇区), 模块本身不碰 Flash */
 #define SERVO_TEST_CFG_BANK_A ADDR_FLASH_SECTOR_10 /* 0x080C0000 */
 #define SERVO_TEST_CFG_BANK_B ADDR_FLASH_SECTOR_11 /* 0x080E0000 */
 
-/* 持久化镜像: 显式 int32 + 无隐式 padding(9 float + 2 int32 = 44B) */
+/*
+ * 持久化镜像: 只保存"标定参数", 不保存运行状态。
+ * 用固定宽度类型(9 个 float + 2 个 int32 = 44B)保证无隐式 padding, 跨编译器 CRC 一致。
+ */
 typedef struct {
-  float center_us, half_us, half_deg, pulse_min_us, pulse_max_us;
-  float scale, trim_deg, limit_deg, rate_limit_dps;
-  int32_t reverse, zero_enable;
+  float center_us, half_us, half_deg, pulse_min_us, pulse_max_us;  // 信号标定
+  float scale, trim_deg, limit_deg, rate_limit_dps;                // 逻辑标定
+  int32_t reverse, zero_enable;                                    // 方向 / 调零开关
 } ServoTestCfg_s;
 
-/* USB 中断 -> 任务的环形缓冲 */
+/* USB 接收回调在中断上下文, 只把字节塞进环形缓冲, 由任务上下文解析 */
 #define RX_RING_SZ 64
 static volatile char s_ring[RX_RING_SZ];
-static volatile uint8_t s_rh = 0;
-static volatile uint8_t s_wh = 0;
+static volatile uint8_t s_rh = 0;  // 读指针
+static volatile uint8_t s_wh = 0;  // 写指针
 
 /* 行解析缓存(仅任务上下文使用) */
 static char s_line[64];
@@ -72,16 +80,23 @@ static uint8_t s_len = 0;
 static void ParseByte(char c);
 static void HandleLine(char *line);
 
-/* 回复: 同时走 USB-CDC 与 RTT */
+/**
+ * @brief 回复一行: 同时走 USB-CDC 与 RTT(方便任选其一观察)
+ */
 static void Reply(const char *s) {
   if (s == NULL) return;
   if (g_usb_rx != NULL) USBTransmit((uint8_t *)s, (uint16_t)strlen(s));
   SEGGER_RTT_WriteString(0, s);
 }
 
-/* 修改标定后按当前目标角重新输出 */
+/**
+ * @brief 修改标定参数后, 按当前目标角重新输出一次(否则要等下次 ServoSetAngle 才生效)
+ */
 static void Reapply(void) { ServoSetAngle(g_servo, ServoGetTarget(g_servo)); }
 
+/**
+ * @brief 把当前标定参数打包保存到 Flash(双 Bank), 并回复结果
+ */
 static void SaveCfg(void) {
   ServoTestCfg_s p;
   p.center_us = g_servo->cfg.center_us;
@@ -102,6 +117,10 @@ static void SaveCfg(void) {
   }
 }
 
+/**
+ * @brief 从 Flash 读回标定参数并应用
+ * @return true 读到有效数据; false 无有效数据(保持当前默认)
+ */
 static bool LoadCfg(void) {
   ServoTestCfg_s p;
   if (flash_store_load(SERVO_TEST_CFG_BANK_A, SERVO_TEST_CFG_BANK_B, &p, sizeof(p)) != 1) return false;
@@ -120,6 +139,9 @@ static bool LoadCfg(void) {
   return true;
 }
 
+/**
+ * @brief 回读并打印当前状态(逻辑角/目标角/脉宽 + 全部标定参数)
+ */
 static void ReportState(void) {
   char buf[200];
   snprintf(buf, sizeof(buf),
@@ -131,19 +153,23 @@ static void ReportState(void) {
   Reply(buf);
 }
 
-/* USB 接收回调(中断): 只入环形缓冲 */
+/**
+ * @brief USB 接收回调(中断上下文): 只入环形缓冲, 不做解析
+ */
 static void UsbRxCallback(uint16_t len) {
   if (g_usb_rx == NULL) return;
   for (uint16_t i = 0; i < len; i++) {
     uint8_t next = (uint8_t)((s_wh + 1) % RX_RING_SZ);
-    if (next != s_rh) {
+    if (next != s_rh) {  // 未满才写入(满了丢弃, 简单可靠)
       s_ring[s_wh] = (char)g_usb_rx[i];
       s_wh = next;
     }
   }
 }
 
-/* 单字节喂给行解析器(任务上下文) */
+/**
+ * @brief 单字节喂给行解析器(任务上下文); 遇到 \r 或 \n 触发一次 HandleLine
+ */
 static void ParseByte(char c) {
   if (c == '\r' || c == '\n') {
     if (s_len > 0) {
@@ -156,8 +182,12 @@ static void ParseByte(char c) {
   }
 }
 
+/**
+ * @brief 解析并执行一行命令
+ * @note  命令先整体转大写; 以 ',' 分割出命令字与第一个数值参数
+ */
 static void HandleLine(char *line) {
-  for (char *p = line; *p != '\0'; p++) *p = (char)toupper((unsigned char)*p);
+  for (char *p = line; *p != '\0'; p++) *p = (char)toupper((unsigned char)*p);  // 统一大写, 大小写不敏感
 
   char *cmd = strtok(line, ",");
   if (cmd == NULL) return;
@@ -165,37 +195,38 @@ static void HandleLine(char *line) {
   float v = (arg1 != NULL) ? strtof(arg1, NULL) : 0.0f;
 
   if (strcmp(cmd, "PING") == 0) {
-    Reply("PONG\r\n");
+    Reply("PONG\r\n");  // 测通道
     return;
   } else if (strcmp(cmd, "A") == 0 || strcmp(cmd, "ANG") == 0) {
-    ServoSetAngle(g_servo, v);
+    ServoSetAngle(g_servo, v);  // 设逻辑角
   } else if (strcmp(cmd, "U") == 0) {
-    ServoSetPulseUs(g_servo, v);
+    ServoSetPulseUs(g_servo, v);  // 直给脉宽(标定/开环)
   } else if (strcmp(cmd, "Z") == 0) {
-    if (ServoZero(g_servo)) {
+    if (ServoZero(g_servo)) {  // 调零成功 -> 立即落盘
       SaveCfg();
       Reply("OK: zeroed & saved\r\n");
     } else {
       Reply("ERR: zero refused (need zero_enable=1 & |applied|<=30)\r\n");
     }
   } else if (strcmp(cmd, "L") == 0) {
-    ServoSetLimit(g_servo, v);
+    ServoSetLimit(g_servo, v);  // 逻辑角对称限位
   } else if (strcmp(cmd, "S") == 0) {
-    if (v > 0.0f) {
+    if (v > 0.0f) {  // 增益必须为正
       g_servo->cfg.scale = v;
       Reapply();
     }
   } else if (strcmp(cmd, "T") == 0) {
-    g_servo->cfg.trim_deg = v;
+    g_servo->cfg.trim_deg = v;  // 零点微调
     Reapply();
   } else if (strcmp(cmd, "D") == 0) {
-    g_servo->cfg.reverse = g_servo->cfg.reverse ? 0 : 1;
+    g_servo->cfg.reverse = g_servo->cfg.reverse ? 0 : 1;  // 方向翻转
     Reapply();
   } else if (strcmp(cmd, "R") == 0) {
-    g_servo->cfg.rate_limit_dps = v;
+    g_servo->cfg.rate_limit_dps = v;  // 速率限幅(<=0 不限速)
   } else if (strcmp(cmd, "ZE") == 0) {
-    g_servo->cfg.zero_enable = (v != 0.0f) ? 1 : 0;
+    g_servo->cfg.zero_enable = (v != 0.0f) ? 1 : 0;  // 调零功能开关
   } else if (strcmp(cmd, "C") == 0) {
+    /* 清除标定: 全部回默认值 */
     g_servo->cfg.center_us = SERVO_TEST_CENTER_US;
     g_servo->cfg.half_us = SERVO_TEST_HALF_US;
     g_servo->cfg.half_deg = SERVO_TEST_HALF_DEG;
@@ -216,16 +247,16 @@ static void HandleLine(char *line) {
       Reply("LOAD: no valid data\r\n");
     }
   } else if (strcmp(cmd, "E") == 0) {
-    ServoEnable(g_servo);
+    ServoEnable(g_servo);  // 启动 PWM
   } else if (strcmp(cmd, "X") == 0) {
-    ServoDisable(g_servo);
+    ServoDisable(g_servo);  // 停止 PWM
   } else if (strcmp(cmd, "I") == 0 || strcmp(cmd, "?") == 0) {
-    /* 落到下面回状态 */
+    /* 回读状态: 落到下面统一 ReportState */
   } else {
     Reply("ERR: unknown cmd\r\n");
     return;
   }
-  ReportState();
+  ReportState();  // 任何有效命令执行后都回读一次状态
 }
 
 void RobotInit(void) {
@@ -234,13 +265,13 @@ void RobotInit(void) {
   /* 注册一路 PWM 舵机: PWM1 = TIM1_CH1 = PE9 */
   Servo_Init_Config_s servo_cfg;
   memset(&servo_cfg, 0, sizeof(servo_cfg));
-  servo_cfg.pwm.htim = SERVO_TEST_TIM;
-  servo_cfg.pwm.channel = SERVO_TEST_CHANNEL;
-  servo_cfg.pwm.period = SERVO_TEST_PERIOD_S;
-  servo_cfg.pwm.dutyratio = SERVO_TEST_DUTY_INIT;
-  servo_cfg.center_us = SERVO_TEST_CENTER_US;
-  servo_cfg.half_us = SERVO_TEST_HALF_US;
-  servo_cfg.half_deg = SERVO_TEST_HALF_DEG;
+  servo_cfg.pwm.htim = SERVO_TEST_TIM;             // TIM1
+  servo_cfg.pwm.channel = SERVO_TEST_CHANNEL;      // CH1
+  servo_cfg.pwm.period = SERVO_TEST_PERIOD_S;      // 20ms -> 50Hz
+  servo_cfg.pwm.dutyratio = SERVO_TEST_DUTY_INIT;  // 初始占空比(1.5ms)
+  servo_cfg.center_us = SERVO_TEST_CENTER_US;      // 中位 1500us
+  servo_cfg.half_us = SERVO_TEST_HALF_US;          // 半程 1000us
+  servo_cfg.half_deg = SERVO_TEST_HALF_DEG;        // 半行程 139.5°
   servo_cfg.pulse_min_us = SERVO_TEST_PULSE_MIN_US;
   servo_cfg.pulse_max_us = SERVO_TEST_PULSE_MAX_US;
   servo_cfg.scale = SERVO_TEST_SCALE;
@@ -270,7 +301,7 @@ void RobotInit(void) {
 void RobotTask(void) {
   ServoTask();  // 速率限幅推进(>0 时生效)
 
-  /* 1) 排空 USB 环形缓冲 */
+  /* 1) 排空 USB 环形缓冲(中断写入) */
   while (s_rh != s_wh) {
     char c = s_ring[s_rh];
     s_rh = (uint8_t)((s_rh + 1) % RX_RING_SZ);

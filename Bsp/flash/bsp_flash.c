@@ -251,18 +251,36 @@ uint32_t get_next_flash_address(uint32_t address) {
 }
 
 /* ============================== 通用掉电保存 (双 Bank) ============================== */
-/* 单份记录 = {magic, seq, crc} 头 + data; 头固定 3 word(12B), data 紧随其后。 */
+/*
+ * 目的: 给任意模块/应用提供"写参数 -> 掉电不丢"的能力, 并避免"单扇区写坏 / 写一半掉电"
+ *       导致配置全丢。
+ *
+ * 记录布局(每个 bank 都从扇区起始地址开始):
+ *   +0x00  magic (0xB1A5D00D)  -- 记录标记, 不匹配则视为该 bank 无效
+ *   +0x04  seq   (递增序号)     -- 读取时 seq 更大的 bank 胜出
+ *   +0x08  crc   (FNV-1a)       -- 对 data 区校验
+ *   +0x0C  data[]               -- 调用方数据, 长度 size(必须 4 字节对齐)
+ *
+ * 保存策略(双 Bank 交替): 总是写"非当前"那个 bank, seq = 当前seq+1; 写完回读校验,
+ *       通过才算成功; 若目标 bank 写失败则回退写另一个 bank。
+ * 读取策略: 两份都校验, 取 seq 更大的那一份。
+ */
 
-#define FLASH_STORE_MAGIC 0xB1A5D00Du /* 记录记号; 记录布局变化时修改 */
-#define FLASH_STORE_HDR_WORDS 3u      /* magic / seq / crc */
+#define FLASH_STORE_MAGIC 0xB1A5D00Du /* 记录记号; 记录布局变化时修改, 使旧数据失效 */
+#define FLASH_STORE_HDR_WORDS 3u      /* 头长度: magic / seq / crc 共 3 个 word(12B) */
 
+/* 记录头(4 字节对齐、无隐式 padding) */
 typedef struct {
-  uint32_t magic;
-  uint32_t seq;
-  uint32_t crc;
+  uint32_t magic; /* 记录标记 */
+  uint32_t seq;   /* 递增序号 */
+  uint32_t crc;   /* data 区 FNV-1a 校验 */
 } FlashStoreHeader_s;
 
-/* FNV-1a (RAM 数据) */
+/**
+ * @brief 计算 RAM 数据的 FNV-1a 校验
+ * @param p    数据首地址
+ * @param size 字节数
+ */
 static uint32_t FlashStoreCrcRam(const uint8_t *p, uint32_t size) {
   uint32_t s = 0x811C9DC5u, i;
   for (i = 0; i < size; i++) {
@@ -272,7 +290,10 @@ static uint32_t FlashStoreCrcRam(const uint8_t *p, uint32_t size) {
   return s;
 }
 
-/* FNV-1a (Flash 数据, 分块读取避免申请与 size 等大的缓冲) */
+/**
+ * @brief 计算 Flash 中数据的 FNV-1a 校验
+ * @note  分块读取(64B)累加, 避免申请与 size 等大的临时缓冲
+ */
 static uint32_t FlashStoreCrcAt(uint32_t addr, uint32_t size) {
   uint8_t buf[64];
   uint32_t s = 0x811C9DC5u, i;
@@ -289,7 +310,11 @@ static uint32_t FlashStoreCrcAt(uint32_t addr, uint32_t size) {
   return s;
 }
 
-/* 校验一个 bank; 有效返回 1, 并可回传 seq */
+/**
+ * @brief 校验一个 bank 是否有效
+ * @param  addr 扇区起始地址; size 数据字节数; seq 可选回传序号
+ * @return 1 有效(magic 匹配且 data CRC 一致), 0 无效
+ */
 static int8_t FlashStoreValid(uint32_t addr, uint32_t size, uint32_t *seq) {
   FlashStoreHeader_s h;
   flash_read(addr, (uint32_t *)&h, FLASH_STORE_HDR_WORDS);
@@ -299,24 +324,36 @@ static int8_t FlashStoreValid(uint32_t addr, uint32_t size, uint32_t *seq) {
   return 1;
 }
 
-/* 擦+写一个 bank 的完整记录, 回读校验; 0 成功 -1 失败 */
+/**
+ * @brief 擦除并写入一个 bank 的完整记录, 然后回读校验
+ * @param  addr 扇区起始地址; seq 序号; data/size 待写数据
+ * @return 0 成功 / -1 失败
+ */
 static int8_t FlashStoreWriteBank(uint32_t addr, uint32_t seq, const void *data, uint32_t size) {
   FlashStoreHeader_s h;
   h.magic = FLASH_STORE_MAGIC;
   h.seq = seq;
   h.crc = FlashStoreCrcRam((const uint8_t *)data, size);
-  flash_erase_address(addr, 1);
-  flash_write_single_address(addr, (uint32_t *)&h, FLASH_STORE_HDR_WORDS);
-  flash_write_single_address(addr + FLASH_STORE_HDR_WORDS * 4u, (uint32_t *)data, size / 4u);
-  return FlashStoreValid(addr, size, NULL) ? 0 : -1;
+  flash_erase_address(addr, 1);                                                       // 擦整扇区
+  flash_write_single_address(addr, (uint32_t *)&h, FLASH_STORE_HDR_WORDS);            // 写头
+  flash_write_single_address(addr + FLASH_STORE_HDR_WORDS * 4u, (uint32_t *)data,      // 写数据
+                             size / 4u);
+  return FlashStoreValid(addr, size, NULL) ? 0 : -1;  // 回读校验
 }
 
+/**
+ * @brief 保存数据(双 Bank 交替 + 回读校验 + 失败回退)
+ * @param  bank_a/bank_b 两个备份扇区起始地址; data/size 待保存数据(4 字节对齐)
+ * @return 0 成功 / -1 失败
+ * @note   优先写"非当前"bank(首次无有效数据则写 A); 写失败自动回退写另一个 bank。
+ */
 int8_t flash_store_save(uint32_t bank_a, uint32_t bank_b, const void *data, uint32_t size) {
   uint32_t sa = 0u, sb = 0u, seq, active, target, other;
   int oka, okb;
 
-  if (data == NULL || size == 0u || (size & 3u) != 0u) return -1;
+  if (data == NULL || size == 0u || (size & 3u) != 0u) return -1;  // 参数非法
 
+  /* 判定当前有效 bank 与序号 */
   oka = FlashStoreValid(bank_a, size, &sa);
   okb = FlashStoreValid(bank_b, size, &sb);
   if (oka && okb) {
@@ -341,6 +378,11 @@ int8_t flash_store_save(uint32_t bank_a, uint32_t bank_b, const void *data, uint
   return -1;
 }
 
+/**
+ * @brief 读取数据(取两份中 seq 更大的有效 bank)
+ * @param  bank_a/bank_b 两个备份扇区起始地址; data 输出缓冲; size 数据字节数(4 字节对齐)
+ * @return 1 读到有效数据 / 0 无有效数据(调用方保持默认值即可)
+ */
 int8_t flash_store_load(uint32_t bank_a, uint32_t bank_b, void *data, uint32_t size) {
   uint32_t sa = 0u, sb = 0u, src;
   int oka, okb;
@@ -349,11 +391,11 @@ int8_t flash_store_load(uint32_t bank_a, uint32_t bank_b, void *data, uint32_t s
 
   oka = FlashStoreValid(bank_a, size, &sa);
   okb = FlashStoreValid(bank_b, size, &sb);
-  if (!oka && !okb) return 0;
+  if (!oka && !okb) return 0; /* 两份都无效 */
 
-  if (oka && okb) src = (sa >= sb) ? bank_a : bank_b;
+  if (oka && okb) src = (sa >= sb) ? bank_a : bank_b; /* 取 seq 更大者 */
   else src = oka ? bank_a : bank_b;
 
-  flash_read(src + FLASH_STORE_HDR_WORDS * 4u, (uint32_t *)data, size / 4u);
+  flash_read(src + FLASH_STORE_HDR_WORDS * 4u, (uint32_t *)data, size / 4u);  // 跳过记录头
   return 1;
 }
