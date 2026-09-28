@@ -2,40 +2,40 @@
  * @file robot.c
  * @author ai
  * @brief servo_motor 驱动测试 app (servo_test)
- * @version 1.1
+ * @version 2.0
  * @date 2026-09-28
  *
  * 命令通道: 同时支持
- *   1) J-Link RTT (推荐, 只需 JLink): 用 J-Link RTT Viewer 在 Channel 0 输入框发命令;
- *   2) USB-CDC 虚拟串口(若插了板载 USB -> COM 口)
+ *   1) J-Link RTT (Channel 0 输入框发命令);
+ *   2) USB-CDC 虚拟串口(插了板载 USB -> COM 口)。
  * ASCII 行协议(以 \r 或 \n 结尾), 命令:
- *   PING             -> PONG
- *   A,<deg> / ANG,<deg>   设逻辑角(deg)
- *   U,<us>          直接设脉宽(us)
- *   Z               当前位置记为逻辑 0°(调零)
- *   M               把当前位置标定为 90°(按比例反算 scale, 物理不动)
- *   N,<deg>         设逻辑 0° 对应机械角(center)
- *   T,<deg>         设微调 trim
- *   S,<scale>       设比例 scale
- *   D               方向翻转
- *   R,<dps>         设速率限幅(deg/s, <=0 不限速)
- *   L,<deg>         设逻辑角对称限位 ±deg(如 L,90)
- *   G,<deg>         设机械量程    PL,<us>/PH,<us> 设脉宽两端
- *   C               清除标定
- *   E / X           使能 / 失能(PWM 输出)
- *   I 或 ?          回读状态
- * 回复(USB + RTT 同时): OK a=.. raw=.. pulse=.. | cal c=.. t=.. s=.. d=.. r=..
+ *   PING                 -> PONG
+ *   A,<deg> / ANG,<deg>  设逻辑角(deg)
+ *   U,<us>               直接设脉宽(us)
+ *   Z                    当前位置记为逻辑 0°(调零; 受 zero_enable 与 ±30° 窗口限制)并保存
+ *   L,<deg>              逻辑角对称限位 ±deg
+ *   S,<scale>            逻辑角->机械角 增益
+ *   T,<deg>              零点微调 trim
+ *   D                    方向翻转
+ *   R,<dps>              速率限幅(deg/s, <=0 不限速)
+ *   ZE,<0|1>             调零功能开关
+ *   C                    清除标定(回默认)
+ *   SAVE / LOAD          立即写 Flash / 从 Flash 读回(双 Bank)
+ *   E / X                使能 / 失能(PWM 输出)
+ *   I 或 ?               回读状态
  */
 #include "robot.h"
 
 #include <ctype.h>
 #include <math.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "SEGGER_RTT.h"
 #include "bsp_dwt.h"
+#include "bsp_flash.h"
 #include "bsp_log.h"
 #include "bsp_usb.h"
 #include "robot_config.h"
@@ -47,6 +47,17 @@ RobotInstance *robot = NULL;
 
 static ServoInstance *g_servo = NULL;
 static uint8_t *g_usb_rx = NULL;
+
+/* 掉电保存: 双 Bank 两扇区 */
+#define SERVO_TEST_CFG_BANK_A ADDR_FLASH_SECTOR_10 /* 0x080C0000 */
+#define SERVO_TEST_CFG_BANK_B ADDR_FLASH_SECTOR_11 /* 0x080E0000 */
+
+/* 持久化镜像: 显式 int32 + 无隐式 padding(9 float + 2 int32 = 44B) */
+typedef struct {
+  float center_us, half_us, half_deg, pulse_min_us, pulse_max_us;
+  float scale, trim_deg, limit_deg, rate_limit_dps;
+  int32_t reverse, zero_enable;
+} ServoTestCfg_s;
 
 /* USB 中断 -> 任务的环形缓冲 */
 #define RX_RING_SZ 64
@@ -68,15 +79,55 @@ static void Reply(const char *s) {
   SEGGER_RTT_WriteString(0, s);
 }
 
+/* 修改标定后按当前目标角重新输出 */
+static void Reapply(void) { ServoSetAngle(g_servo, ServoGetTarget(g_servo)); }
+
+static void SaveCfg(void) {
+  ServoTestCfg_s p;
+  p.center_us = g_servo->cfg.center_us;
+  p.half_us = g_servo->cfg.half_us;
+  p.half_deg = g_servo->cfg.half_deg;
+  p.pulse_min_us = g_servo->cfg.pulse_min_us;
+  p.pulse_max_us = g_servo->cfg.pulse_max_us;
+  p.scale = g_servo->cfg.scale;
+  p.trim_deg = g_servo->cfg.trim_deg;
+  p.limit_deg = g_servo->cfg.limit_deg;
+  p.rate_limit_dps = g_servo->cfg.rate_limit_dps;
+  p.reverse = g_servo->cfg.reverse;
+  p.zero_enable = g_servo->cfg.zero_enable;
+  if (flash_store_save(SERVO_TEST_CFG_BANK_A, SERVO_TEST_CFG_BANK_B, &p, sizeof(p)) == 0) {
+    Reply("SAVED\r\n");
+  } else {
+    Reply("SAVEERR\r\n");
+  }
+}
+
+static bool LoadCfg(void) {
+  ServoTestCfg_s p;
+  if (flash_store_load(SERVO_TEST_CFG_BANK_A, SERVO_TEST_CFG_BANK_B, &p, sizeof(p)) != 1) return false;
+  g_servo->cfg.center_us = p.center_us;
+  g_servo->cfg.half_us = p.half_us;
+  g_servo->cfg.half_deg = p.half_deg;
+  g_servo->cfg.pulse_min_us = p.pulse_min_us;
+  g_servo->cfg.pulse_max_us = p.pulse_max_us;
+  g_servo->cfg.scale = p.scale;
+  g_servo->cfg.trim_deg = p.trim_deg;
+  g_servo->cfg.limit_deg = p.limit_deg;
+  g_servo->cfg.rate_limit_dps = p.rate_limit_dps;
+  g_servo->cfg.reverse = (uint8_t)p.reverse;
+  g_servo->cfg.zero_enable = (uint8_t)p.zero_enable;
+  Reapply();
+  return true;
+}
+
 static void ReportState(void) {
-  Servo_Calib_Config_s c;
-  ServoGetCalib(g_servo, &c);
   char buf[200];
   snprintf(buf, sizeof(buf),
-           "OK a=%.1f raw=%.1f pulse=%.0f | cal c=%.1f t=%.1f s=%.3f d=%d r=%.0f | rg=%.1f p=%.0f/%.0f lim=%.1f\r\n",
-           ServoGetAngle(g_servo), ServoGetRawDeg(g_servo), ServoGetPulseUs(g_servo),
-           c.center_deg, c.trim_deg, c.scale, (int)c.reverse, c.rate_limit_dps,
-           c.range_deg, c.pulse_min_us, c.pulse_max_us, c.limit_deg);
+           "OK a=%.1f tgt=%.1f pulse=%.0f | cu=%.0f hu=%.0f hd=%.1f s=%.3f t=%.1f d=%d lim=%.1f r=%.0f z=%d\r\n",
+           ServoGetAngle(g_servo), ServoGetTarget(g_servo), ServoGetPulseUs(g_servo),
+           g_servo->cfg.center_us, g_servo->cfg.half_us, g_servo->cfg.half_deg,
+           g_servo->cfg.scale, g_servo->cfg.trim_deg, (int)g_servo->cfg.reverse,
+           g_servo->cfg.limit_deg, g_servo->cfg.rate_limit_dps, (int)g_servo->cfg.zero_enable);
   Reply(buf);
 }
 
@@ -122,52 +173,48 @@ static void HandleLine(char *line) {
     ServoSetPulseUs(g_servo, v);
   } else if (strcmp(cmd, "Z") == 0) {
     if (ServoZero(g_servo)) {
+      SaveCfg();
       Reply("OK: zeroed & saved\r\n");
     } else {
-      Reply("ERR: zero refused (raw must be within mid 135 +/-30, i.e. 105~165)\r\n");
+      Reply("ERR: zero refused (need zero_enable=1 & |applied|<=30)\r\n");
     }
-  } else if (strcmp(cmd, "N") == 0) {
-    ServoSetNeutral(g_servo, v);
-  } else if (strcmp(cmd, "T") == 0) {
-    ServoSetTrim(g_servo, v);
-  } else if (strcmp(cmd, "S") == 0) {
-    ServoSetScale(g_servo, v);
-  } else if (strcmp(cmd, "D") == 0) {
-    Servo_Calib_Config_s c;
-    ServoGetCalib(g_servo, &c);
-    ServoSetReverse(g_servo, c.reverse > 0 ? -1 : 1);
-  } else if (strcmp(cmd, "R") == 0) {
-    ServoSetRateLimit(g_servo, v);
   } else if (strcmp(cmd, "L") == 0) {
     ServoSetLimit(g_servo, v);
-  } else if (strcmp(cmd, "G") == 0) {
-    ServoSetRange(g_servo, v);
-  } else if (strcmp(cmd, "PL") == 0) {
-    Servo_Calib_Config_s c;
-    ServoGetCalib(g_servo, &c);
-    ServoSetPulseRange(g_servo, v, c.pulse_max_us);
-  } else if (strcmp(cmd, "PH") == 0) {
-    Servo_Calib_Config_s c;
-    ServoGetCalib(g_servo, &c);
-    ServoSetPulseRange(g_servo, c.pulse_min_us, v);
-  } else if (strcmp(cmd, "M") == 0) {
-    /* 记 90°: 把当前逻辑角 L 标定为 90°, 按比例反算 scale(物理位置不动)。
-     * 新 scale = 旧 scale * |L| / 90, 之后逻辑角改为 ±90(与 L 同号)。 */
-    float L = ServoGetAngle(g_servo);
-    if (fabsf(L) < 1.0e-3f) {
-      Reply("ERR: L~0, move to the 90 mark first\r\n");
-      return;
+  } else if (strcmp(cmd, "S") == 0) {
+    if (v > 0.0f) {
+      g_servo->cfg.scale = v;
+      Reapply();
     }
-    Servo_Calib_Config_s c;
-    ServoGetCalib(g_servo, &c);
-    ServoSetScale(g_servo, c.scale * fabsf(L) / 90.0f);
-    ServoSetAngle(g_servo, (L >= 0.0f) ? 90.0f : -90.0f);
+  } else if (strcmp(cmd, "T") == 0) {
+    g_servo->cfg.trim_deg = v;
+    Reapply();
+  } else if (strcmp(cmd, "D") == 0) {
+    g_servo->cfg.reverse = g_servo->cfg.reverse ? 0 : 1;
+    Reapply();
+  } else if (strcmp(cmd, "R") == 0) {
+    g_servo->cfg.rate_limit_dps = v;
+  } else if (strcmp(cmd, "ZE") == 0) {
+    g_servo->cfg.zero_enable = (v != 0.0f) ? 1 : 0;
   } else if (strcmp(cmd, "C") == 0) {
-    ServoResetCal(g_servo);
+    g_servo->cfg.center_us = SERVO_TEST_CENTER_US;
+    g_servo->cfg.half_us = SERVO_TEST_HALF_US;
+    g_servo->cfg.half_deg = SERVO_TEST_HALF_DEG;
+    g_servo->cfg.pulse_min_us = SERVO_TEST_PULSE_MIN_US;
+    g_servo->cfg.pulse_max_us = SERVO_TEST_PULSE_MAX_US;
+    g_servo->cfg.scale = SERVO_TEST_SCALE;
+    g_servo->cfg.trim_deg = SERVO_TEST_TRIM_DEG;
+    g_servo->cfg.limit_deg = SERVO_TEST_LIMIT_DEG;
+    g_servo->cfg.rate_limit_dps = SERVO_TEST_RATE_DPS;
+    g_servo->cfg.reverse = SERVO_TEST_REVERSE;
+    Reapply();
   } else if (strcmp(cmd, "SAVE") == 0) {
-    ServoSaveCalib();
+    SaveCfg();
   } else if (strcmp(cmd, "LOAD") == 0) {
-    ServoLoadCalib();
+    if (LoadCfg()) {
+      Reply("LOADED\r\n");
+    } else {
+      Reply("LOAD: no valid data\r\n");
+    }
   } else if (strcmp(cmd, "E") == 0) {
     ServoEnable(g_servo);
   } else if (strcmp(cmd, "X") == 0) {
@@ -187,24 +234,24 @@ void RobotInit(void) {
   /* 注册一路 PWM 舵机: PWM1 = TIM1_CH1 = PE9 */
   Servo_Init_Config_s servo_cfg;
   memset(&servo_cfg, 0, sizeof(servo_cfg));
-  servo_cfg.servo_type = PWM_Servo;
-  servo_cfg.servo_id = SERVO_TEST_ID;
-  servo_cfg.pwm_init_config.htim = SERVO_TEST_TIM;
-  servo_cfg.pwm_init_config.channel = SERVO_TEST_CHANNEL;
-  servo_cfg.pwm_init_config.period = SERVO_TEST_PERIOD_S;
-  servo_cfg.pwm_init_config.dutyratio = SERVO_TEST_DUTY_INIT;
-  servo_cfg.calib.pulse_min_us = SERVO_TEST_PULSE_MIN_US;
-  servo_cfg.calib.pulse_max_us = SERVO_TEST_PULSE_MAX_US;
-  servo_cfg.calib.range_deg = SERVO_TEST_RANGE_DEG;
-  servo_cfg.calib.center_deg = SERVO_TEST_CENTER_DEG;
-  servo_cfg.calib.trim_deg = SERVO_TEST_TRIM_DEG;
-  servo_cfg.calib.scale = SERVO_TEST_SCALE;
-  servo_cfg.calib.reverse = SERVO_TEST_REVERSE;
-  servo_cfg.calib.rate_limit_dps = SERVO_TEST_RATE_DPS;
-  servo_cfg.calib.limit_deg = SERVO_TEST_LIMIT_DEG;
+  servo_cfg.pwm.htim = SERVO_TEST_TIM;
+  servo_cfg.pwm.channel = SERVO_TEST_CHANNEL;
+  servo_cfg.pwm.period = SERVO_TEST_PERIOD_S;
+  servo_cfg.pwm.dutyratio = SERVO_TEST_DUTY_INIT;
+  servo_cfg.center_us = SERVO_TEST_CENTER_US;
+  servo_cfg.half_us = SERVO_TEST_HALF_US;
+  servo_cfg.half_deg = SERVO_TEST_HALF_DEG;
+  servo_cfg.pulse_min_us = SERVO_TEST_PULSE_MIN_US;
+  servo_cfg.pulse_max_us = SERVO_TEST_PULSE_MAX_US;
+  servo_cfg.scale = SERVO_TEST_SCALE;
+  servo_cfg.trim_deg = SERVO_TEST_TRIM_DEG;
+  servo_cfg.limit_deg = SERVO_TEST_LIMIT_DEG;
+  servo_cfg.rate_limit_dps = SERVO_TEST_RATE_DPS;
+  servo_cfg.reverse = SERVO_TEST_REVERSE;
+  servo_cfg.zero_enable = SERVO_TEST_ZERO_ENABLE;
   g_servo = ServoInit(&servo_cfg);
 
-  ServoLoadCalib();  // 从 Flash 读回标定(掉电保存; 无有效数据则用源码默认值)
+  LoadCfg();  // 从 Flash 读回标定(掉电保存; 无有效数据则用源码默认值)
 
   /* 初始化 USB-CDC 命令通道(即使没插 USB 也无害) */
   USB_Init_Config_s usb_cfg;
@@ -216,7 +263,7 @@ void RobotInit(void) {
   ServoSetAngle(g_servo, SERVO_TEST_INIT_DEG);
 
   LOGINFO("[servo_test] ready: PWM1/TIM1_CH1/PE9");
-  Reply("\r\nservo_test ready (RTT ch0 / USB-CDC). cmds: PING A,<deg> U,<us> Z M N T S D R G L PL PH C SAVE LOAD E X I\r\n");
+  Reply("\r\nservo_test ready (RTT ch0 / USB-CDC). cmds: PING A,<deg> U,<us> Z L,<deg> S,<s> T,<d> D R,<dps> ZE,<0|1> C SAVE LOAD E X I\r\n");
   ReportState();
 }
 

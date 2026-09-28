@@ -77,4 +77,18 @@ void flash_read(uint32_t address, uint32_t *buf, uint32_t len);
   * @retval         next page flash address
   */
 uint32_t get_next_flash_address(uint32_t address);
+
+/**
+  * @brief          通用掉电保存 (双 Bank 交替 + magic + seq + CRC 校验)
+  *                 调用方指定两个整扇区起始地址作为 A/B 备份, 数据长度 size 必须 4 字节对齐。
+  *                 保存: 写"非当前"bank 并 seq+1, 回读校验, 通过才切换; 目标 bank 失败则回退另一个。
+  *                 读取: 读两份, 校验通过且 seq 更大者胜出。可被任意模块/应用复用(舵机标定/参数表等)。
+  * @param[in]      bank_a/bank_b: A/B 备份扇区起始地址
+  * @param[in/out]  data: 待保存 / 读出的数据缓冲
+  * @param[in]      size: 数据字节数 (4 字节对齐, 且单份需小于一个扇区)
+  * @retval         flash_store_save: 0 成功, -1 失败; flash_store_load: 1 有效, 0 无有效数据
+  */
+int8_t flash_store_save(uint32_t bank_a, uint32_t bank_b, const void *data, uint32_t size);
+int8_t flash_store_load(uint32_t bank_a, uint32_t bank_b, void *data, uint32_t size);
+
 #endif

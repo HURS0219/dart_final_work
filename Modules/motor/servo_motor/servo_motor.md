@@ -1,211 +1,113 @@
 # servo_motor
 
-<p align='right'>panrui@hnu.edu.cn / merged by ai from dart_servo_v0.2</p>
+<p align='right'>ai @ dart_final_work</p>
 
-> version: 1.0（由 `UserApp/robot/dart_servo_v0.2` 的舵机驱动抽提、合并重写为通用 module）
->
-> todo:
-> 1. 目前只实现“角度控制（开环位置）”与总线舵机角度回读，暂无负载/温度/到位反馈（PWM 舵机本身无反馈）。
-> 2. 总线舵机的命令帧仍沿用旧实现的定长缓冲，后续可改为按 `servo_id` 动态组帧。
+PWM 舵机（PTK7350 等）底层驱动。**只负责单路舵机的“逻辑角 ↔ 脉宽”标定、速率限幅与调零**；四舵面混控/状态机由应用层或 `servo_mixer` 负责，参数掉电保存由 `bsp_flash` 的 `flash_store_save/load` 负责。
 
-## 1. 简介
+## 总览和封装说明
 
-`servo_motor` 是舵机（Servo）的通用驱动模块，位于 **module 层**，对上层 app 屏蔽底层差异：
+> 如果不需要理解内部原理，只看这一节即可。
 
-- **PWM 舵机**：通过 `bsp_pwm` 输出 50Hz PWM，脉宽线性对应机械角；内置**标定**（中性/微调/比例/方向/量程）与**速率限幅**。
-- **串口总线舵机**：通过 `bsp_usart` 发送角度命令帧，并解析位置回读帧。
+- 一路舵机 = 一个 `ServoInstance`。调用 `ServoInit()` 注册并保存返回的指针，之后用 `ServoSetAngle()` 设定逻辑角。
+- 50Hz 舵机 PWM 由 `Bsp/pwm/bsp_pwm` 输出；本模块只把“逻辑角”换算成脉宽 `PWMSetDutyRatio()`。
+- 标定公式（`reverse` 在最后取负）：
 
-> 本模块只负责“**驱动 + 标定 + 速率限幅**”。状态机（待机/手动/混控/自检）、混控矩阵等**控制逻辑属于 app 层**，以保持 module 层通用、可复用。
+  ```
+  applied = 逻辑角 * scale + trim            (机械偏角, 单位 deg)
+  pulse   = center_us + applied * (half_us / half_deg)
+  ```
 
-## 2. 舵机基础知识
+- 未启用速率限幅时 `ServoSetAngle()` 立即到位；启用后由周期调用 `ServoTask()` 平滑推进。
+- `ServoZero()` 把“当前位置”记为逻辑 0°（调零），需 `zero_enable = 1` 且当前机械偏角在 `±SERVO_ZERO_WINDOW_DEG` 之内，否则拒绝。
 
-以最常见的 PWM 舵机为例：工作在 **50Hz（周期 20ms）**，高电平脉宽落在 `pulse_min ~ pulse_max`（通常 0.5ms~2.5ms）之间，线性对应舵机机械角：
+**单位**：逻辑角/机械角 = deg；脉宽 = us；速率 = deg/s。
 
-```
-0.5ms ---   0°      1.0ms ---  45°      1.5ms ---  90°
-2.0ms --- 135°      2.5ms --- 180°
-```
-
-- 对 **180° 型**（如常见 SG90）：500~2500us ↔ 0~180°。
-- 对 **270° 型**（如 PTK7350 270°/实测约 279°）：500~2500us ↔ 0~270°(279°)。
-  即同样的脉宽范围对应更大的行程，**每度对应的脉宽更小**，标定时务必设对 `range_deg`。
-
-PWM 由定时器产生：`Tout = (PSC+1)*(ARR+1)/Tclk`。C 板 TIM1 挂 APB2，168MHz，50Hz 时常用 `PSC=168-1, ARR=20000-1`。本模块不直接写 ARR/CCR，而是调用 `bsp_pwm` 的 `PWMSetDutyRatio()`，占空比 = `脉宽 / 周期`。
-
-## 3. 逻辑角 / 机械角 / 标定模型
-
-- **机械角** `raw_deg`：舵机真实转动角，范围 `0 ~ range_deg`。
-- **逻辑角** `angle`：软件层的“偏角”，中立项为 0，正负表示两个方向。
-- 换算：`raw = center_deg + trim_deg + reverse * scale * angle`（再限幅到 `0~range_deg`）；
-  脉宽：`pulse = pulse_min + raw/range * (pulse_max - pulse_min)`。
-
-各标定项：
-
-| 项 | 含义 |
-|---|---|
-| `center_deg` | 逻辑 0° 对应的机械角（默认 `range/2`，即电气中位 1500us） |
-| `trim_deg` | 中性微调（在 center 基础上平移） |
-| `scale` | 比例（逻辑角→机械角的增益） |
-| `reverse` | 方向（+1/-1） |
-| `rate_limit_dps` | 速率限幅（°/s），>0 时由 `ServoTask()` 平滑推进 |
-
-## 4. 代码结构
-
-- `servo_motor.h`：类型定义与对外接口。
-- `servo_motor.c`：实例注册、角度控制、速率限幅任务、标定、总线舵机解析。
-
-## 5. 类型定义
+## 类型定义
 
 ```c
-#define SERVO_MOTOR_CNT 7
-
-typedef enum { Servo_None_Type = 0, Bus_Servo = 1, PWM_Servo = 2 } ServoType_e;
-
-typedef struct {
-  float pulse_min_us;    // 机械 0° 对应脉宽 (如 500)
-  float pulse_max_us;    // 机械 range_deg 对应脉宽 (如 2500)
-  float range_deg;       // 机械量程 (180 / 270 / 279 ...)
-  float center_deg;      // 逻辑 0° 对应的机械角 (默认 range_deg/2)
-  float trim_deg;        // 中性微调
-  float scale;           // 比例 (默认 1)
-  int8_t reverse;        // 方向: +1 / -1 (默认 +1)
-  float rate_limit_dps;  // 速率限幅 deg/s (<=0 不限速)
-} Servo_Calib_Config_s;
+#define SERVO_MOTOR_CNT       4        // 最大实例数
+#define SERVO_ZERO_WINDOW_DEG 30.0f    // 调零窗口(相对中位)
 
 typedef struct {
-  ServoType_e servo_type;
-  uint8_t servo_id;
-  UART_HandleTypeDef *_handle;        // Bus_Servo
-  PWM_Init_Config_s pwm_init_config;  // PWM_Servo (周期建议 0.02s)
-  Servo_Calib_Config_s calib;         // PWM_Servo
+  PWM_Init_Config_s pwm;   // PWM 通道(period 建议 0.02s)
+  float center_us;         // 机械 0° 对应脉宽(1500)
+  float half_us;           // 中位到行程端对应脉宽(1000)
+  float half_deg;          // 行程一半(139.5 = 279/2)
+  float pulse_min_us;      // 脉宽硬下限(500)
+  float pulse_max_us;      // 脉宽硬上限(2500)
+  float scale;             // 逻辑角->机械角 增益(1)
+  float trim_deg;          // 零点/中立微调
+  float limit_deg;         // 逻辑角对称限位 ±limit_deg; <=0 默认 half_deg
+  float rate_limit_dps;    // 速率限幅 deg/s; <=0 不限速
+  uint8_t reverse;         // 0 正常 / 1 反向
+  uint8_t zero_enable;     // 调零功能开关: 0 禁用 / 1 启用
 } Servo_Init_Config_s;
 
 typedef struct {
-  uint8_t servo_id;
-  ServoType_e servo_type;
-  PWMInstance *pwm_instance;
-  USARTInstance *usart_instance;
-  Servo_Calib_Config_s calib;
-  float target_deg, angle, raw_deg, pulse_us, last_time_s;
-  uint16_t recv_angle;
+  PWMInstance *pwm;
+  Servo_Init_Config_s cfg;    // 运行时配置, 标定字段可在线改
+  float target_deg;           // 目标逻辑角
+  float angle_deg;            // 当前逻辑角(限速后)
+  float pulse_us;             // 当前脉宽
+  float last_time_s;
 } ServoInstance;
 ```
 
-## 6. 外部接口
-
-```c
-/* ---------- 注册 / 角度 / 周期任务 ---------- */
-ServoInstance *ServoInit(Servo_Init_Config_s *config);      // 注册舵机
-void ServoSetAngle(ServoInstance *servo, float angle);      // 设逻辑角(deg)
-void ServoSetPulseUs(ServoInstance *servo, float pulse_us); // 直接给脉宽(us, 自动限幅)
-void ServoTask(void);                                       // 周期任务: 限速推进 + 输出(必须周期调用)
-
-/* ---------- 标定 ---------- */
-void  ServoSetNeutral(ServoInstance*, float center_deg);    // 逻辑0°对应机械角
-void  ServoSetTrim(ServoInstance*, float trim_deg);         // 中性微调
-void  ServoSetScale(ServoInstance*, float scale);           // 比例
-void  ServoSetReverse(ServoInstance*, int8_t reverse);      // 方向 +1 / -1
-void  ServoSetRange(ServoInstance*, float range_deg);       // 机械量程(180/270/279...)
-void  ServoSetPulseRange(ServoInstance*, float min_us, float max_us); // 脉宽两端
-void  ServoSetLimit(ServoInstance*, float limit_deg);       // 逻辑角对称限位 ±limit_deg
-void  ServoResetCal(ServoInstance*);                        // 清标定(回默认)
-
-/* ---------- 调零 (对外接口) ---------- */
-uint8_t ServoZero(ServoInstance*);                          // 把"当前位置"记为逻辑 0°(脉宽不变, 物理不动), 成功则写入 Flash; 1=成功 0=被窗口拒绝
-uint8_t ServoZeroAll(void);                                 // 所有已注册实例统一调零并写 Flash; 返回成功个数
-
-/* ---------- 掉电保存 ---------- */
-void  ServoSaveCalib(void);                                 // 把所有实例标定写入 Flash
-void  ServoLoadCalib(void);                                 // 上电后调用: 从 Flash 读回标定(有效则覆盖源码默认值)
-
-/* ---------- 限速 (对外接口) ---------- */
-void  ServoSetRateLimit(ServoInstance*, float dps);         // 设限速 deg/s (<=0 表示不限速/立即到位)
-float ServoGetRateLimit(ServoInstance*);                    // 读回限速值
-
-/* ---------- 使能 / 失能 / 查询 ---------- */
-void  ServoEnable(ServoInstance*);                          // 启动输出
-void  ServoDisable(ServoInstance*);                         // 停止输出
-void  ServoUnload(ServoInstance*);                          // 总线: 失力
-void  ServoRequestAngle(ServoInstance*);                    // 总线: 请求位置回读
-float     ServoGetAngle(ServoInstance*);                    // 逻辑角
-float     ServoGetRawDeg(ServoInstance*);                   // 机械角
-float     ServoGetPulseUs(ServoInstance*);                  // 脉宽
-uint16_t  ServoGetRecvAngle(ServoInstance*);                // 总线回读角
-void      ServoGetCalib(ServoInstance*, Servo_Calib_Config_s*); // 标定快照(封装, app 不直接访问内部)
-```
-
-## 7. 使用示例
-
-### 7.1 PWM 舵机（PTK7350，四路 X 型舵面）
+## 初始化示例
 
 ```c
 #include "servo_motor.h"
 #include "tim.h"
 
-static ServoInstance *surfaces[4];
+ServoInstance *g_servo;
 
-void ServoExampleInit(void) {
-  const uint32_t ch[4] = {TIM_CHANNEL_1, TIM_CHANNEL_2, TIM_CHANNEL_3, TIM_CHANNEL_4};
-  for (uint8_t i = 0; i < 4; i++) {
-    Servo_Init_Config_s cfg = {
-        .servo_type = PWM_Servo,
-        .servo_id = i,
-        .pwm_init_config = {
-            .htim = &htim1,
-            .channel = ch[i],
-            .period = 0.02f,     // 50Hz
-            .dutyratio = 0.075f, // 1.5ms 中立
-        },
-        .calib = {
-            .pulse_min_us = 500.0f,
-            .pulse_max_us = 2500.0f,
-            .range_deg = 270.0f,   // PTK7350 270°型;180°型改 180
-            .center_deg = 135.0f,  // 逻辑0°=机械中位(270/2)
-            .trim_deg = 0.0f,
-            .scale = 1.0f,
-            .reverse = 1,
-            .rate_limit_dps = 600.0f,  // 启用速率限幅
-        },
-    };
-    surfaces[i] = ServoInit(&cfg);
-  }
-}
-
-/* 在 app 周期任务(建议 100Hz~1kHz)中调用 */
-void ServoExampleTask(void) {
-  ServoTask();          // 速率限幅推进
-  ServoSetAngle(surfaces[0], 20.0f);  // 第 1 路逻辑角 +20°
+void ServoTest_Init(void) {
+  Servo_Init_Config_s cfg = {
+      .pwm = {.htim = &htim1, .channel = TIM_CHANNEL_1,
+              .period = 0.02f, .dutyratio = 0.075f},
+      .center_us = 1500.0f, .half_us = 1000.0f, .half_deg = 139.5f,
+      .pulse_min_us = 500.0f, .pulse_max_us = 2500.0f,
+      .scale = 1.0f, .trim_deg = 0.0f, .limit_deg = 90.0f,
+      .rate_limit_dps = 0.0f, .reverse = 0, .zero_enable = 1,
+  };
+  g_servo = ServoInit(&cfg);
+  ServoSetAngle(g_servo, 0.0f);   // 上电回中位
 }
 ```
 
-### 7.2 串口总线舵机
+## 外部接口
 
 ```c
-Servo_Init_Config_s cfg = {
-    .servo_type = Bus_Servo,
-    .servo_id = 1,
-    ._handle = &huart6,
-};
-ServoInstance *s = ServoInit(&cfg);
-ServoSetAngle(s, 1200.0f);          // 下发角度(按总线协议单位)
-ServoRequestAngle(s);               // 请求位置回读
-uint16_t a = ServoGetRecvAngle(s);  // 回读角(需周期收到应答帧)
+ServoInstance *ServoInit(Servo_Init_Config_s *config);
+void  ServoSetAngle(ServoInstance*, float angle);      // 设逻辑角
+void  ServoSetPulseUs(ServoInstance*, float pulse_us); // 直给脉宽(标定/测试)
+void  ServoTask(void);                                 // 速率限幅推进(周期调用)
+uint8_t ServoZero(ServoInstance*);                     // 调零, 1 成功 0 未启用/超窗口
+void  ServoSetLimit(ServoInstance*, float limit_deg);  // 逻辑角限位
+void  ServoEnable(ServoInstance*);                     // 启动 PWM
+void  ServoDisable(ServoInstance*);                    // 停止 PWM(失去保持力)
+float ServoGetAngle(ServoInstance*);                   // 当前逻辑角
+float ServoGetTarget(ServoInstance*);                  // 目标逻辑角
+float ServoGetPulseUs(ServoInstance*);                 // 当前脉宽
 ```
 
-## 8. 标定步骤（两步法）
+## 私有函数和变量
 
-1. **调零**：手动/上位机把舵面拖到物理中立（或期望的逻辑 0° 位置），调用 `ServoZero()` —— 把当前位置记为逻辑 0°（改 `center_deg`，脉宽不变，舵机不跳变）。
-   - **安全窗口**：仅当当前**机械角**落在 **机械中位 `range_deg/2`（舵机物理 0°）±`SERVO_ZERO_WINDOW_DEG`（默认 30°）** 之内才允许调零；否则 `ServoZero()` 返回 0、**拒绝且不写 Flash**，避免在极端/饱和位置误调零。`ServoZeroAll()` 返回成功个数，全被拒绝则不落盘。
-2. **定比例**：把舵面拖到某个已知机械角标记（如物理 90°），按 `scale = 期望机械角差 / 当前逻辑角差` 调整 `ServoSetScale()`；对 180° 型/270° 型一定要把 `range_deg` 设对。
+`.c` 内 static：`Clamp / LimitDeg / PeriodUs / AppliedOf / ApplyLogical`，以及实例数组 `servo_motor_instance[]` 与索引 `servo_idx`。
 
-> 标定结果建议由 app 层做掉电保存（module 层不做持久化）。
+## 掉电保存
 
-## 9. 注意事项
+模块**不直接读写 Flash**。参数持久化请用 `bsp_flash`：
 
-- **方向**：`reverse` 必须与实际安装方向一致，否则混控会“顶牛”。
-- **量程**：`range_deg` 必须区分 180° / 270° 型；用错会导致行程比例错误、易撞机械止挡。
-- **限速**：启用 `rate_limit_dps` 后**必须在周期任务中调用 `ServoTask()`**，否则舵机不会动。
-- **无反馈**：PWM 舵机无位置/负载反馈，`ServoGetAngle()` 返回的是指令角而非实测角；防堵转需靠软限位 + 外部电流检测。
-- **总线舵机**：`DecodeServo` 在中断上下文执行，只做轻量解析；角度单位为协议单位，`servo_id` 与帧内 ID 需一致。
-- **掉电保存**：`ServoZero` / `ServoSaveCalib` 会擦写 `SERVO_CALIB_FLASH_ADDR`（F407 默认扇区 11 = `0x080E0000`）。上电调用一次 `ServoLoadCalib()`，若 Flash 有有效标定（magic+CRC）则覆盖源码默认值；擦除前会清 Flash 错误标志。换 MCU 记得改 `SERVO_CALIB_FLASH_ADDR`。
-- **限位**：`limit_deg` 是对 **逻辑角** 的对称限幅（±limit_deg），逻辑 0° 即 `center_deg`（调零后的零点），所以限幅是相对零点生效。
+```c
+#include "bsp_flash.h"
+flash_store_save(ADDR_FLASH_SECTOR_10, ADDR_FLASH_SECTOR_11, &calib, sizeof(calib));
+flash_store_load(ADDR_FLASH_SECTOR_10, ADDR_FLASH_SECTOR_11, &calib, sizeof(calib));
+```
+
+## 注意事项
+
+1. `limit_deg` 是**逻辑角**对称限位（相对逻辑 0°，即调零后的零点）。
+2. `pulse_min/max_us` 是硬限幅，超出会被截断（PTK7350 越程可能翻转）。
+3. 调零是“把当前位置记为逻辑 0°”，物理上不动；禁用 `zero_enable` 时 `ServoZero()` 直接返回 0。
+4. 保存的结构体应无隐式 padding（用固定宽度整型），否则跨编译器 CRC 可能不一致。

@@ -16,21 +16,36 @@ static uint32_t ger_sector(uint32_t address);
  * @retval         none
  */
 /**
- * @brief          ²Á³ıflash
- * @param[in]      address: flash µØÖ·
- * @param[in]      len: Ò³ÊıÁ¿
+ * @brief          ï¿½ï¿½ï¿½ï¿½flash
+ * @param[in]      address: flash ï¿½ï¿½Ö·
+ * @param[in]      len: Ò³ï¿½ï¿½ï¿½ï¿½
  * @retval         none
  */
+/* æ¸…é™¤æ‚¬æŒ‚çš„ Flash é”™è¯¯æ ‡å¿—: è‹¥æ®‹ç•™ WRPERR/PGSERR ç­‰, æ“¦é™¤ä¼šç›´æ¥é™é»˜å¤±è´¥ */
+static void FlashClearErrors(void) {
+#if defined(STM32F407xx)
+  __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_EOP | FLASH_FLAG_OPERR | FLASH_FLAG_WRPERR |
+                         FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR | FLASH_FLAG_PGSERR);
+#elif defined(STM32H723xx)
+  __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS_BANK1 | FLASH_FLAG_ALL_ERRORS_BANK2);
+#endif
+}
+
 void flash_erase_address(uint32_t address, uint16_t len) {
   FLASH_EraseInitTypeDef flash_erase;
-  uint32_t error;
+  uint32_t error = 0xFFFFFFFFu;
 
-  flash_erase.Sector = ger_sector(address);
   flash_erase.TypeErase = FLASH_TYPEERASE_SECTORS;
   flash_erase.VoltageRange = FLASH_VOLTAGE_RANGE_3;
   flash_erase.NbSectors = len;
+  flash_erase.Sector = ger_sector(address);
+  flash_erase.Banks = 0u;
+#ifdef STM32H723xx
+  flash_erase.Banks = (address >= ADDR_FLASH_SECTOR_12) ? FLASH_BANK_2 : FLASH_BANK_1;
+#endif
 
   HAL_FLASH_Unlock();
+  FlashClearErrors();  // å¿…é¡»å…ˆæ¸…é”™è¯¯æ ‡å¿—, å¦åˆ™æ“¦é™¤é™é»˜å¤±è´¥
   HAL_FLASHEx_Erase(&flash_erase, &error);
   HAL_FLASH_Lock();
 }
@@ -43,10 +58,10 @@ void flash_erase_address(uint32_t address, uint16_t len) {
  * @retval         success 0, fail -1
  */
 /**
- * @brief          ÍùÒ»Ò³flashĞ´Êı¾İ
- * @param[in]      start_address: flash µØÖ·
- * @param[in]      buf: Êı¾İÖ¸Õë
- * @param[in]      len: Êı¾İ³¤¶È
+ * @brief          ï¿½ï¿½Ò»Ò³flashĞ´ï¿½ï¿½ï¿½ï¿½
+ * @param[in]      start_address: flash ï¿½ï¿½Ö·
+ * @param[in]      buf: ï¿½ï¿½ï¿½ï¿½Ö¸ï¿½ï¿½
+ * @param[in]      len: ï¿½ï¿½ï¿½İ³ï¿½ï¿½ï¿½
  * @retval         success 0, fail -1
  */
 int8_t flash_write_single_address(uint32_t start_address, uint32_t *buf, uint32_t len) {
@@ -89,11 +104,11 @@ int8_t flash_write_single_address(uint32_t start_address, uint32_t *buf, uint32_
  * @retval         success 0, fail -1
  */
 /**
- * @brief          Íù¼¸Ò³flashĞ´Êı¾İ
- * @param[in]      start_address: flash ¿ªÊ¼µØÖ·
- * @param[in]      end_address: flash ½áÊøµØÖ·
- * @param[in]      buf: Êı¾İÖ¸Õë
- * @param[in]      len: Êı¾İ³¤¶È
+ * @brief          ï¿½ï¿½ï¿½ï¿½Ò³flashĞ´ï¿½ï¿½ï¿½ï¿½
+ * @param[in]      start_address: flash ï¿½ï¿½Ê¼ï¿½ï¿½Ö·
+ * @param[in]      end_address: flash ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö·
+ * @param[in]      buf: ï¿½ï¿½ï¿½ï¿½Ö¸ï¿½ï¿½
+ * @param[in]      len: ï¿½ï¿½ï¿½İ³ï¿½ï¿½ï¿½
  * @retval         success 0, fail -1
  */
 int8_t flash_write_muli_address(uint32_t start_address, uint32_t end_address, uint32_t *buf, uint32_t len) {
@@ -132,10 +147,10 @@ int8_t flash_write_muli_address(uint32_t start_address, uint32_t end_address, ui
  * @retval         none
  */
 /**
- * @brief          ´Óflash¶ÁÊı¾İ
- * @param[in]      start_address: flash µØÖ·
- * @param[out]     buf: Êı¾İÖ¸Õë
- * @param[in]      len: Êı¾İ³¤¶È
+ * @brief          ï¿½ï¿½flashï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+ * @param[in]      start_address: flash ï¿½ï¿½Ö·
+ * @param[out]     buf: ï¿½ï¿½ï¿½ï¿½Ö¸ï¿½ï¿½
+ * @param[in]      len: ï¿½ï¿½ï¿½İ³ï¿½ï¿½ï¿½
  * @retval         none
  */
 void flash_read(uint32_t address, uint32_t *buf, uint32_t len) { memcpy(buf, (void *)address, len * 4); }
@@ -146,12 +161,19 @@ void flash_read(uint32_t address, uint32_t *buf, uint32_t len) { memcpy(buf, (vo
  * @retval         sector number
  */
 /**
- * @brief          »ñÈ¡flashµÄsectorºÅ
- * @param[in]      address: flash µØÖ·
- * @retval         sectorºÅ
+ * @brief          ï¿½ï¿½È¡flashï¿½ï¿½sectorï¿½ï¿½
+ * @param[in]      address: flash ï¿½ï¿½Ö·
+ * @retval         sectorï¿½ï¿½
  */
 static uint32_t ger_sector(uint32_t address) {
   uint32_t sector = 0;
+#ifdef STM32H723xx
+  /* H7: æ¯æ‰‡åŒº 128KB; bank1 ä» 0x08000000, bank2 ä» 0x08100000; è¿”å› bank å†…æ‰‡åŒºå· */
+  {
+    uint32_t base = (address >= ADDR_FLASH_SECTOR_12) ? ADDR_FLASH_SECTOR_12 : ADDR_FLASH_SECTOR_0;
+    return (address - base) / 0x20000u;
+  }
+#endif
   if ((address < ADDR_FLASH_SECTOR_1) && (address >= ADDR_FLASH_SECTOR_0)) {
     sector = FLASH_SECTOR_0;
   } else if ((address < ADDR_FLASH_SECTOR_2) && (address >= ADDR_FLASH_SECTOR_1)) {
@@ -192,9 +214,9 @@ static uint32_t ger_sector(uint32_t address) {
  * @retval         next page flash address
  */
 /**
- * @brief          »ñÈ¡ÏÂÒ»Ò³flashµØÖ·
- * @param[in]      address: flash µØÖ·
- * @retval         ÏÂÒ»Ò³flashµØÖ·
+ * @brief          ï¿½ï¿½È¡ï¿½ï¿½Ò»Ò³flashï¿½ï¿½Ö·
+ * @param[in]      address: flash ï¿½ï¿½Ö·
+ * @retval         ï¿½ï¿½Ò»Ò³flashï¿½ï¿½Ö·
  */
 uint32_t get_next_flash_address(uint32_t address) {
   uint32_t sector = 0;
@@ -226,4 +248,112 @@ uint32_t get_next_flash_address(uint32_t address) {
     sector = FLASH_END_ADDR;
   }
   return sector;
+}
+
+/* ============================== é€šç”¨æ‰ç”µä¿å­˜ (åŒ Bank) ============================== */
+/* å•ä»½è®°å½• = {magic, seq, crc} å¤´ + data; å¤´å›ºå®š 3 word(12B), data ç´§éšå…¶åã€‚ */
+
+#define FLASH_STORE_MAGIC 0xB1A5D00Du /* è®°å½•è®°å·; è®°å½•å¸ƒå±€å˜åŒ–æ—¶ä¿®æ”¹ */
+#define FLASH_STORE_HDR_WORDS 3u      /* magic / seq / crc */
+
+typedef struct {
+  uint32_t magic;
+  uint32_t seq;
+  uint32_t crc;
+} FlashStoreHeader_s;
+
+/* FNV-1a (RAM æ•°æ®) */
+static uint32_t FlashStoreCrcRam(const uint8_t *p, uint32_t size) {
+  uint32_t s = 0x811C9DC5u, i;
+  for (i = 0; i < size; i++) {
+    s ^= p[i];
+    s *= 16777619u;
+  }
+  return s;
+}
+
+/* FNV-1a (Flash æ•°æ®, åˆ†å—è¯»å–é¿å…ç”³è¯·ä¸ size ç­‰å¤§çš„ç¼“å†²) */
+static uint32_t FlashStoreCrcAt(uint32_t addr, uint32_t size) {
+  uint8_t buf[64];
+  uint32_t s = 0x811C9DC5u, i;
+  while (size > 0u) {
+    uint32_t n = (size > sizeof(buf)) ? (uint32_t)sizeof(buf) : size;
+    flash_read(addr, (uint32_t *)buf, n / 4u);
+    for (i = 0; i < n; i++) {
+      s ^= buf[i];
+      s *= 16777619u;
+    }
+    addr += n;
+    size -= n;
+  }
+  return s;
+}
+
+/* æ ¡éªŒä¸€ä¸ª bank; æœ‰æ•ˆè¿”å› 1, å¹¶å¯å›ä¼  seq */
+static int8_t FlashStoreValid(uint32_t addr, uint32_t size, uint32_t *seq) {
+  FlashStoreHeader_s h;
+  flash_read(addr, (uint32_t *)&h, FLASH_STORE_HDR_WORDS);
+  if (h.magic != FLASH_STORE_MAGIC) return 0;
+  if (h.crc != FlashStoreCrcAt(addr + FLASH_STORE_HDR_WORDS * 4u, size)) return 0;
+  if (seq != NULL) *seq = h.seq;
+  return 1;
+}
+
+/* æ“¦+å†™ä¸€ä¸ª bank çš„å®Œæ•´è®°å½•, å›è¯»æ ¡éªŒ; 0 æˆåŠŸ -1 å¤±è´¥ */
+static int8_t FlashStoreWriteBank(uint32_t addr, uint32_t seq, const void *data, uint32_t size) {
+  FlashStoreHeader_s h;
+  h.magic = FLASH_STORE_MAGIC;
+  h.seq = seq;
+  h.crc = FlashStoreCrcRam((const uint8_t *)data, size);
+  flash_erase_address(addr, 1);
+  flash_write_single_address(addr, (uint32_t *)&h, FLASH_STORE_HDR_WORDS);
+  flash_write_single_address(addr + FLASH_STORE_HDR_WORDS * 4u, (uint32_t *)data, size / 4u);
+  return FlashStoreValid(addr, size, NULL) ? 0 : -1;
+}
+
+int8_t flash_store_save(uint32_t bank_a, uint32_t bank_b, const void *data, uint32_t size) {
+  uint32_t sa = 0u, sb = 0u, seq, active, target, other;
+  int oka, okb;
+
+  if (data == NULL || size == 0u || (size & 3u) != 0u) return -1;
+
+  oka = FlashStoreValid(bank_a, size, &sa);
+  okb = FlashStoreValid(bank_b, size, &sb);
+  if (oka && okb) {
+    active = (sa >= sb) ? bank_a : bank_b;
+    seq = (sa >= sb) ? sa : sb;
+  } else if (oka) {
+    active = bank_a;
+    seq = sa;
+  } else if (okb) {
+    active = bank_b;
+    seq = sb;
+  } else {
+    active = 0u; /* é¦–æ¬¡: active ç½®é A, ä½¿ target è½åˆ° A */
+    seq = 0u;
+  }
+
+  target = (active == bank_a) ? bank_b : bank_a; /* ä¼˜å…ˆå†™éå½“å‰ bank */
+  other = (target == bank_a) ? bank_b : bank_a;
+
+  if (FlashStoreWriteBank(target, seq + 1u, data, size) == 0) return 0;
+  if (FlashStoreWriteBank(other, seq + 1u, data, size) == 0) return 0; /* å›é€€å¦ä¸€ä¸ª bank */
+  return -1;
+}
+
+int8_t flash_store_load(uint32_t bank_a, uint32_t bank_b, void *data, uint32_t size) {
+  uint32_t sa = 0u, sb = 0u, src;
+  int oka, okb;
+
+  if (data == NULL || size == 0u || (size & 3u) != 0u) return 0;
+
+  oka = FlashStoreValid(bank_a, size, &sa);
+  okb = FlashStoreValid(bank_b, size, &sb);
+  if (!oka && !okb) return 0;
+
+  if (oka && okb) src = (sa >= sb) ? bank_a : bank_b;
+  else src = oka ? bank_a : bank_b;
+
+  flash_read(src + FLASH_STORE_HDR_WORDS * 4u, (uint32_t *)data, size / 4u);
+  return 1;
 }
