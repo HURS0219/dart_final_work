@@ -78,17 +78,38 @@ void ServoTest_Init(void) {
 ## 外部接口
 
 ```c
-ServoInstance *ServoInit(Servo_Init_Config_s *config);
-void  ServoSetAngle(ServoInstance*, float angle);      // 设逻辑角
-void  ServoSetPulseUs(ServoInstance*, float pulse_us); // 直给脉宽(标定/测试)
-void  ServoTask(void);                                 // 速率限幅推进(周期调用)
-uint8_t ServoZero(ServoInstance*);                     // 调零, 1 成功 0 未启用/超窗口
-void  ServoSetLimit(ServoInstance*, float limit_deg);  // 逻辑角限位
-void  ServoEnable(ServoInstance*);                     // 启动 PWM
-void  ServoDisable(ServoInstance*);                    // 停止 PWM(失去保持力)
-float ServoGetAngle(ServoInstance*);                   // 当前逻辑角
-float ServoGetTarget(ServoInstance*);                  // 目标逻辑角
-float ServoGetPulseUs(ServoInstance*);                 // 当前脉宽
+ServoInstance *ServoInit(Servo_Init_Config_s *config);   // 注册一路舵机(返回实例指针)
+void  ServoSetAngle(ServoInstance*, float angle);        // 设逻辑角
+void  ServoSetPulseUs(ServoInstance*, float pulse_us);   // 直给脉宽(标定/测试)
+void  ServoTask(void);                                   // 速率限幅推进(周期调用)
+uint8_t ServoZero(ServoInstance*);                       // 调零, 1 成功 0 未启用/超窗口
+void  ServoEnable(ServoInstance*);                       // 启动 PWM
+void  ServoDisable(ServoInstance*);                      // 停止 PWM(失去保持力)
+float ServoGetAngle(ServoInstance*);                     // 当前逻辑角
+float ServoGetTarget(ServoInstance*);                    // 目标逻辑角
+float ServoGetPulseUs(ServoInstance*);                   // 当前脉宽
+```
+
+### 标定(在线调参, 封装入口)
+
+调用方只需依赖 `Servo_Calib_s`(无 padding), **不需要了解实例内部结构**：
+
+```c
+void  ServoSetCalib(ServoInstance*, const Servo_Calib_s*);   // 批量写标定并立即生效
+void  ServoGetCalib(ServoInstance*, Servo_Calib_s*);         // 取快照(可直接存 Flash)
+void  ServoSetLimit(ServoInstance*, float limit_deg);        // 逻辑角对称限位
+void  ServoSetScale(ServoInstance*, float scale);            // 增益(>0)
+void  ServoSetTrim(ServoInstance*, float trim_deg);          // 零点微调
+void  ServoSetReverse(ServoInstance*, uint8_t reverse);      // 方向(0/1)
+void  ServoSetRateLimit(ServoInstance*, float dps);          // 速率限幅(<=0 不限速)
+```
+
+```c
+typedef struct {                 // 全部 4 字节字段 -> 无 padding, 可直接持久化
+  float center_us, half_us, half_deg, pulse_min_us, pulse_max_us;
+  float scale, trim_deg, limit_deg, rate_limit_dps;
+  int32_t reverse, zero_enable;
+} Servo_Calib_s;
 ```
 
 ## 私有函数和变量
@@ -97,13 +118,27 @@ float ServoGetPulseUs(ServoInstance*);                 // 当前脉宽
 
 ## 掉电保存
 
-模块**不直接读写 Flash**。参数持久化请用 `bsp_flash`：
+模块**不直接读写 Flash**。用 `Servo_Calib_s` 快照 + `bsp_flash` 的通用双 Bank 存取即可：
 
 ```c
 #include "bsp_flash.h"
-flash_store_save(ADDR_FLASH_SECTOR_10, ADDR_FLASH_SECTOR_11, &calib, sizeof(calib));
-flash_store_load(ADDR_FLASH_SECTOR_10, ADDR_FLASH_SECTOR_11, &calib, sizeof(calib));
+
+#define BANK_A ADDR_FLASH_SECTOR_10
+#define BANK_B ADDR_FLASH_SECTOR_11
+
+/* 保存 */
+Servo_Calib_s calib;
+ServoGetCalib(servo, &calib);
+flash_store_save(BANK_A, BANK_B, &calib, sizeof(calib));
+
+/* 读回 */
+Servo_Calib_s calib;
+if (flash_store_load(BANK_A, BANK_B, &calib, sizeof(calib)) == 1) {
+    ServoSetCalib(servo, &calib);
+}
 ```
+
+`Servo_Calib_s` 全为 4 字节字段(无 padding)，可直接交给 `flash_store_save/load`，无需再复制一份结构体。
 
 ## 注意事项
 

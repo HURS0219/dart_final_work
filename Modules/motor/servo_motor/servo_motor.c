@@ -244,6 +244,74 @@ void ServoSetLimit(ServoInstance *servo, float limit_deg) {
   ApplyLogical(servo, servo->angle_deg);
 }
 
+/* ------------------------------ 标定(在线调参) ------------------------------ */
+
+/**
+ * @brief 批量写入标定并立即生效
+ * @note  逐字段合法性检查: 非法值(如 half_deg<=0 / scale<=0 / 脉宽上下界颠倒)保持原值,
+ *        避免除零或方向异常; 最后按当前"目标角"重发(遵守限速/限位)。
+ */
+void ServoSetCalib(ServoInstance *servo, const Servo_Calib_s *calib) {
+  if (servo == NULL || calib == NULL) return;
+
+  if (calib->center_us > 0.0f) servo->cfg.center_us = calib->center_us;
+  if (calib->half_us > 0.0f) servo->cfg.half_us = calib->half_us;
+  if (calib->half_deg > 0.0f) servo->cfg.half_deg = calib->half_deg;
+  if (calib->pulse_min_us > 0.0f && calib->pulse_max_us > calib->pulse_min_us) {
+    servo->cfg.pulse_min_us = calib->pulse_min_us;
+    servo->cfg.pulse_max_us = calib->pulse_max_us;
+  }
+  if (calib->scale > 0.0f) servo->cfg.scale = calib->scale;
+  servo->cfg.trim_deg = calib->trim_deg;
+  servo->cfg.limit_deg = (calib->limit_deg > 0.0f) ? calib->limit_deg : 0.0f;
+  servo->cfg.rate_limit_dps = calib->rate_limit_dps;
+  servo->cfg.reverse = (calib->reverse != 0) ? 1 : 0;
+  servo->cfg.zero_enable = (calib->zero_enable != 0) ? 1 : 0;
+
+  ServoSetAngle(servo, servo->target_deg);  // 立即生效(遵守限位/限速)
+}
+
+/**
+ * @brief 取当前标定快照, 可直接交给 flash_store_save 持久化
+ */
+void ServoGetCalib(ServoInstance *servo, Servo_Calib_s *out) {
+  if (servo == NULL || out == NULL) return;
+  out->center_us = servo->cfg.center_us;
+  out->half_us = servo->cfg.half_us;
+  out->half_deg = servo->cfg.half_deg;
+  out->pulse_min_us = servo->cfg.pulse_min_us;
+  out->pulse_max_us = servo->cfg.pulse_max_us;
+  out->scale = servo->cfg.scale;
+  out->trim_deg = servo->cfg.trim_deg;
+  out->limit_deg = servo->cfg.limit_deg;
+  out->rate_limit_dps = servo->cfg.rate_limit_dps;
+  out->reverse = servo->cfg.reverse;
+  out->zero_enable = servo->cfg.zero_enable;
+}
+
+void ServoSetScale(ServoInstance *servo, float scale) {
+  if (servo == NULL || scale <= 0.0f) return;
+  servo->cfg.scale = scale;
+  ServoSetAngle(servo, servo->target_deg);
+}
+
+void ServoSetTrim(ServoInstance *servo, float trim_deg) {
+  if (servo == NULL) return;
+  servo->cfg.trim_deg = trim_deg;
+  ServoSetAngle(servo, servo->target_deg);
+}
+
+void ServoSetReverse(ServoInstance *servo, uint8_t reverse) {
+  if (servo == NULL) return;
+  servo->cfg.reverse = reverse ? 1 : 0;
+  ServoSetAngle(servo, servo->target_deg);
+}
+
+void ServoSetRateLimit(ServoInstance *servo, float dps) {
+  if (servo == NULL) return;
+  servo->cfg.rate_limit_dps = dps;
+}
+
 /**
  * @brief 使能: 启动 PWM 输出并按当前逻辑角重发一次
  */

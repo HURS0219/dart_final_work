@@ -2,7 +2,7 @@
  * @file robot.c
  * @author ai
  * @brief servo_motor 驱动测试 app (servo_test)
- * @version 2.0
+ * @version 2.1
  * @date 2026-09-28
  *
  * 命令通道: 同时支持
@@ -25,9 +25,8 @@
  *   E / X                使能 / 失能(PWM 输出)
  *   I 或 ?               回读状态
  *
- * 状态回读格式:
- *   OK a=<逻辑角> tgt=<目标角> pulse=<脉宽> | cu=<中位> hu=<半脉宽> hd=<半行程> \
- *      s=<增益> t=<trim> d=<方向> lim=<限位> r=<限速> z=<调零开关>
+ * 标定读写: app 只依赖 Servo_Calib_s(无 padding), 持久化直接交给 bsp_flash 的
+ *           flash_store_save/load; 不复制模块内部字段, 模块不碰 Flash。
  */
 #include "robot.h"
 
@@ -53,19 +52,9 @@ RobotInstance *robot = NULL;
 static ServoInstance *g_servo = NULL;  // 唯一测试舵机
 static uint8_t *g_usb_rx = NULL;       // USB-CDC 接收缓冲
 
-/* 掉电保存: 使用 bsp_flash 的双 Bank(两个扇区), 模块本身不碰 Flash */
+/* 掉电保存: 使用 bsp_flash 的双 Bank(两个扇区) */
 #define SERVO_TEST_CFG_BANK_A ADDR_FLASH_SECTOR_10 /* 0x080C0000 */
 #define SERVO_TEST_CFG_BANK_B ADDR_FLASH_SECTOR_11 /* 0x080E0000 */
-
-/*
- * 持久化镜像: 只保存"标定参数", 不保存运行状态。
- * 用固定宽度类型(9 个 float + 2 个 int32 = 44B)保证无隐式 padding, 跨编译器 CRC 一致。
- */
-typedef struct {
-  float center_us, half_us, half_deg, pulse_min_us, pulse_max_us;  // 信号标定
-  float scale, trim_deg, limit_deg, rate_limit_dps;                // 逻辑标定
-  int32_t reverse, zero_enable;                                    // 方向 / 调零开关
-} ServoTestCfg_s;
 
 /* USB 接收回调在中断上下文, 只把字节塞进环形缓冲, 由任务上下文解析 */
 #define RX_RING_SZ 64
@@ -90,27 +79,12 @@ static void Reply(const char *s) {
 }
 
 /**
- * @brief 修改标定参数后, 按当前目标角重新输出一次(否则要等下次 ServoSetAngle 才生效)
- */
-static void Reapply(void) { ServoSetAngle(g_servo, ServoGetTarget(g_servo)); }
-
-/**
- * @brief 把当前标定参数打包保存到 Flash(双 Bank), 并回复结果
+ * @brief 把当前标定(Servo_Calib_s 快照)保存到 Flash(双 Bank), 并回复结果
  */
 static void SaveCfg(void) {
-  ServoTestCfg_s p;
-  p.center_us = g_servo->cfg.center_us;
-  p.half_us = g_servo->cfg.half_us;
-  p.half_deg = g_servo->cfg.half_deg;
-  p.pulse_min_us = g_servo->cfg.pulse_min_us;
-  p.pulse_max_us = g_servo->cfg.pulse_max_us;
-  p.scale = g_servo->cfg.scale;
-  p.trim_deg = g_servo->cfg.trim_deg;
-  p.limit_deg = g_servo->cfg.limit_deg;
-  p.rate_limit_dps = g_servo->cfg.rate_limit_dps;
-  p.reverse = g_servo->cfg.reverse;
-  p.zero_enable = g_servo->cfg.zero_enable;
-  if (flash_store_save(SERVO_TEST_CFG_BANK_A, SERVO_TEST_CFG_BANK_B, &p, sizeof(p)) == 0) {
+  Servo_Calib_s c;
+  ServoGetCalib(g_servo, &c);
+  if (flash_store_save(SERVO_TEST_CFG_BANK_A, SERVO_TEST_CFG_BANK_B, &c, sizeof(c)) == 0) {
     Reply("SAVED\r\n");
   } else {
     Reply("SAVEERR\r\n");
@@ -118,24 +92,13 @@ static void SaveCfg(void) {
 }
 
 /**
- * @brief 从 Flash 读回标定参数并应用
+ * @brief 从 Flash 读回标定并应用
  * @return true 读到有效数据; false 无有效数据(保持当前默认)
  */
 static bool LoadCfg(void) {
-  ServoTestCfg_s p;
-  if (flash_store_load(SERVO_TEST_CFG_BANK_A, SERVO_TEST_CFG_BANK_B, &p, sizeof(p)) != 1) return false;
-  g_servo->cfg.center_us = p.center_us;
-  g_servo->cfg.half_us = p.half_us;
-  g_servo->cfg.half_deg = p.half_deg;
-  g_servo->cfg.pulse_min_us = p.pulse_min_us;
-  g_servo->cfg.pulse_max_us = p.pulse_max_us;
-  g_servo->cfg.scale = p.scale;
-  g_servo->cfg.trim_deg = p.trim_deg;
-  g_servo->cfg.limit_deg = p.limit_deg;
-  g_servo->cfg.rate_limit_dps = p.rate_limit_dps;
-  g_servo->cfg.reverse = (uint8_t)p.reverse;
-  g_servo->cfg.zero_enable = (uint8_t)p.zero_enable;
-  Reapply();
+  Servo_Calib_s c;
+  if (flash_store_load(SERVO_TEST_CFG_BANK_A, SERVO_TEST_CFG_BANK_B, &c, sizeof(c)) != 1) return false;
+  ServoSetCalib(g_servo, &c);
   return true;
 }
 
@@ -143,13 +106,14 @@ static bool LoadCfg(void) {
  * @brief 回读并打印当前状态(逻辑角/目标角/脉宽 + 全部标定参数)
  */
 static void ReportState(void) {
+  Servo_Calib_s c;
   char buf[200];
+  ServoGetCalib(g_servo, &c);
   snprintf(buf, sizeof(buf),
            "OK a=%.1f tgt=%.1f pulse=%.0f | cu=%.0f hu=%.0f hd=%.1f s=%.3f t=%.1f d=%d lim=%.1f r=%.0f z=%d\r\n",
            ServoGetAngle(g_servo), ServoGetTarget(g_servo), ServoGetPulseUs(g_servo),
-           g_servo->cfg.center_us, g_servo->cfg.half_us, g_servo->cfg.half_deg,
-           g_servo->cfg.scale, g_servo->cfg.trim_deg, (int)g_servo->cfg.reverse,
-           g_servo->cfg.limit_deg, g_servo->cfg.rate_limit_dps, (int)g_servo->cfg.zero_enable);
+           c.center_us, c.half_us, c.half_deg, c.scale, c.trim_deg, (int)c.reverse,
+           c.limit_deg, c.rate_limit_dps, (int)c.zero_enable);
   Reply(buf);
 }
 
@@ -187,7 +151,7 @@ static void ParseByte(char c) {
  * @note  命令先整体转大写; 以 ',' 分割出命令字与第一个数值参数
  */
 static void HandleLine(char *line) {
-  for (char *p = line; *p != '\0'; p++) *p = (char)toupper((unsigned char)*p);  // 统一大写, 大小写不敏感
+  for (char *p = line; *p != '\0'; p++) *p = (char)toupper((unsigned char)*p);  // 统一大写
 
   char *cmd = strtok(line, ",");
   if (cmd == NULL) return;
@@ -211,33 +175,36 @@ static void HandleLine(char *line) {
   } else if (strcmp(cmd, "L") == 0) {
     ServoSetLimit(g_servo, v);  // 逻辑角对称限位
   } else if (strcmp(cmd, "S") == 0) {
-    if (v > 0.0f) {  // 增益必须为正
-      g_servo->cfg.scale = v;
-      Reapply();
-    }
+    ServoSetScale(g_servo, v);  // 增益(内部校验 >0)
   } else if (strcmp(cmd, "T") == 0) {
-    g_servo->cfg.trim_deg = v;  // 零点微调
-    Reapply();
+    ServoSetTrim(g_servo, v);  // 零点微调
   } else if (strcmp(cmd, "D") == 0) {
-    g_servo->cfg.reverse = g_servo->cfg.reverse ? 0 : 1;  // 方向翻转
-    Reapply();
+    Servo_Calib_s c;
+    ServoGetCalib(g_servo, &c);
+    ServoSetReverse(g_servo, c.reverse ? 0 : 1);  // 方向翻转
   } else if (strcmp(cmd, "R") == 0) {
-    g_servo->cfg.rate_limit_dps = v;  // 速率限幅(<=0 不限速)
+    ServoSetRateLimit(g_servo, v);  // 速率限幅(<=0 不限速)
   } else if (strcmp(cmd, "ZE") == 0) {
-    g_servo->cfg.zero_enable = (v != 0.0f) ? 1 : 0;  // 调零功能开关
+    Servo_Calib_s c;
+    ServoGetCalib(g_servo, &c);
+    c.zero_enable = (v != 0.0f) ? 1 : 0;  // 调零功能开关
+    ServoSetCalib(g_servo, &c);
   } else if (strcmp(cmd, "C") == 0) {
-    /* 清除标定: 全部回默认值 */
-    g_servo->cfg.center_us = SERVO_TEST_CENTER_US;
-    g_servo->cfg.half_us = SERVO_TEST_HALF_US;
-    g_servo->cfg.half_deg = SERVO_TEST_HALF_DEG;
-    g_servo->cfg.pulse_min_us = SERVO_TEST_PULSE_MIN_US;
-    g_servo->cfg.pulse_max_us = SERVO_TEST_PULSE_MAX_US;
-    g_servo->cfg.scale = SERVO_TEST_SCALE;
-    g_servo->cfg.trim_deg = SERVO_TEST_TRIM_DEG;
-    g_servo->cfg.limit_deg = SERVO_TEST_LIMIT_DEG;
-    g_servo->cfg.rate_limit_dps = SERVO_TEST_RATE_DPS;
-    g_servo->cfg.reverse = SERVO_TEST_REVERSE;
-    Reapply();
+    /* 清除标定: 构造一份默认标定并写回 */
+    Servo_Calib_s d = {
+        .center_us = SERVO_TEST_CENTER_US,
+        .half_us = SERVO_TEST_HALF_US,
+        .half_deg = SERVO_TEST_HALF_DEG,
+        .pulse_min_us = SERVO_TEST_PULSE_MIN_US,
+        .pulse_max_us = SERVO_TEST_PULSE_MAX_US,
+        .scale = SERVO_TEST_SCALE,
+        .trim_deg = SERVO_TEST_TRIM_DEG,
+        .limit_deg = SERVO_TEST_LIMIT_DEG,
+        .rate_limit_dps = SERVO_TEST_RATE_DPS,
+        .reverse = SERVO_TEST_REVERSE,
+        .zero_enable = SERVO_TEST_ZERO_ENABLE,
+    };
+    ServoSetCalib(g_servo, &d);
   } else if (strcmp(cmd, "SAVE") == 0) {
     SaveCfg();
   } else if (strcmp(cmd, "LOAD") == 0) {
