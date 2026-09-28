@@ -1,3 +1,9 @@
+/**
+ * @file bsp_flash.c
+ * @author neozng / ai
+ * @brief 内部 Flash 读写封装 + 通用掉电保存(双 Bank)
+ * @note  详细说明见 bsp_flash.md
+ */
 #include "bsp_flash.h"
 
 #include "main.h"
@@ -9,19 +15,7 @@
 
 static uint32_t ger_sector(uint32_t address);
 
-/**
- * @brief          erase flash
- * @param[in]      address: flash address
- * @param[in]      len: page num
- * @retval         none
- */
-/**
- * @brief          ����flash
- * @param[in]      address: flash ��ַ
- * @param[in]      len: ҳ����
- * @retval         none
- */
-/* 清除悬挂的 Flash 错误标志: 若残留 WRPERR/PGSERR 等, 擦除会直接静默失败 */
+/* 清除悬挂的 Flash 错误标志: 若有残留的 WRPERR/PGSERR 等, 擦除会直接静默失败 */
 static void FlashClearErrors(void) {
 #if defined(STM32F407xx)
   __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_EOP | FLASH_FLAG_OPERR | FLASH_FLAG_WRPERR |
@@ -31,6 +25,13 @@ static void FlashClearErrors(void) {
 #endif
 }
 
+/**
+ * @brief          擦除 Flash(按扇区)
+ * @param[in]      address: Flash 地址
+ * @param[in]      len: 擦除的扇区数
+ * @retval         none
+ * @note           擦除前先清错误标志, 否则可能静默失败; H7 需按地址选择 Bank。
+ */
 void flash_erase_address(uint32_t address, uint16_t len) {
   FLASH_EraseInitTypeDef flash_erase;
   uint32_t error = 0xFFFFFFFFu;
@@ -51,17 +52,10 @@ void flash_erase_address(uint32_t address, uint16_t len) {
 }
 
 /**
- * @brief          write data to one page of flash
- * @param[in]      start_address: flash address
- * @param[in]      buf: data point
- * @param[in]      len: data num
- * @retval         success 0, fail -1
- */
-/**
- * @brief          ��һҳflashд����
- * @param[in]      start_address: flash ��ַ
- * @param[in]      buf: ����ָ��
- * @param[in]      len: ���ݳ���
+ * @brief          向一页 Flash 写入数据
+ * @param[in]      start_address: 起始地址
+ * @param[in]      buf: 数据指针
+ * @param[in]      len: 数据长度(以 32-bit word 计)
  * @retval         success 0, fail -1
  */
 int8_t flash_write_single_address(uint32_t start_address, uint32_t *buf, uint32_t len) {
@@ -96,19 +90,11 @@ int8_t flash_write_single_address(uint32_t start_address, uint32_t *buf, uint32_
 }
 
 /**
- * @brief          write data to some pages of flash
- * @param[in]      start_address: flash start address
- * @param[in]      end_address: flash end address
- * @param[in]      buf: data point
- * @param[in]      len: data num
- * @retval         success 0, fail -1
- */
-/**
- * @brief          ����ҳflashд����
- * @param[in]      start_address: flash ��ʼ��ַ
- * @param[in]      end_address: flash ������ַ
- * @param[in]      buf: ����ָ��
- * @param[in]      len: ���ݳ���
+ * @brief          向多页 Flash 写入数据
+ * @param[in]      start_address: 起始地址
+ * @param[in]      end_address: 结束地址
+ * @param[in]      buf: 数据指针
+ * @param[in]      len: 数据长度(以 32-bit word 计)
  * @retval         success 0, fail -1
  */
 int8_t flash_write_muli_address(uint32_t start_address, uint32_t end_address, uint32_t *buf, uint32_t len) {
@@ -140,30 +126,20 @@ int8_t flash_write_muli_address(uint32_t start_address, uint32_t end_address, ui
 }
 
 /**
- * @brief          read data for flash
- * @param[in]      address: flash address
- * @param[out]     buf: data point
- * @param[in]      len: data num
- * @retval         none
- */
-/**
- * @brief          ��flash������
- * @param[in]      start_address: flash ��ַ
- * @param[out]     buf: ����ָ��
- * @param[in]      len: ���ݳ���
+ * @brief          从 Flash 读取数据
+ * @param[in]      address: Flash 地址
+ * @param[out]     buf: 数据指针
+ * @param[in]      len: 数据长度(以 32-bit word 计)
  * @retval         none
  */
 void flash_read(uint32_t address, uint32_t *buf, uint32_t len) { memcpy(buf, (void *)address, len * 4); }
 
 /**
- * @brief          get the sector number of flash
- * @param[in]      address: flash address
- * @retval         sector number
- */
-/**
- * @brief          ��ȡflash��sector��
- * @param[in]      address: flash ��ַ
- * @retval         sector��
+ * @brief          获取 Flash 地址所在的扇区号
+ * @param[in]      address: Flash 地址
+ * @retval         sector 号
+ * @note           F407 扇区大小不等(0~3 为 16KB, 4 为 64KB, 5~11 为 128KB);
+ *                 H7 每扇区 128KB, 按 bank 内偏移返回扇区号(配合 flash_erase_address 的 Banks)。
  */
 static uint32_t ger_sector(uint32_t address) {
   uint32_t sector = 0;
@@ -209,14 +185,9 @@ static uint32_t ger_sector(uint32_t address) {
 }
 
 /**
- * @brief          get the next page flash address
- * @param[in]      address: flash address
- * @retval         next page flash address
- */
-/**
- * @brief          ��ȡ��һҳflash��ַ
- * @param[in]      address: flash ��ַ
- * @retval         ��һҳflash��ַ
+ * @brief          获取下一个扇区的起始地址
+ * @param[in]      address: Flash 地址
+ * @retval         下一扇区起始地址
  */
 uint32_t get_next_flash_address(uint32_t address) {
   uint32_t sector = 0;
@@ -334,9 +305,9 @@ static int8_t FlashStoreWriteBank(uint32_t addr, uint32_t seq, const void *data,
   h.magic = FLASH_STORE_MAGIC;
   h.seq = seq;
   h.crc = FlashStoreCrcRam((const uint8_t *)data, size);
-  flash_erase_address(addr, 1);                                                       // 擦整扇区
-  flash_write_single_address(addr, (uint32_t *)&h, FLASH_STORE_HDR_WORDS);            // 写头
-  flash_write_single_address(addr + FLASH_STORE_HDR_WORDS * 4u, (uint32_t *)data,      // 写数据
+  flash_erase_address(addr, 1);                                                    // 擦整扇区
+  flash_write_single_address(addr, (uint32_t *)&h, FLASH_STORE_HDR_WORDS);          // 写头
+  flash_write_single_address(addr + FLASH_STORE_HDR_WORDS * 4u, (uint32_t *)data,   // 写数据
                              size / 4u);
   return FlashStoreValid(addr, size, NULL) ? 0 : -1;  // 回读校验
 }
