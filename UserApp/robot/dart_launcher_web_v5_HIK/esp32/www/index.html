@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#0b0f14">
+<title>飞镖架控制台 v2</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="topbar">
+  <div class="brand">制导飞镖发射架<small>v2</small></div>
+  <div class="pill" id="pill"><span class="dot"></span><span id="pillTxt">未连接</span></div>
+</div>
+
+<main>
+  <!-- 1 识别连接 -->
+  <section class="page on" id="pg0">
+    <div class="card">
+      <h3>控制总线 <span class="tag" id="busTag">CAN1 · 1Mbps</span></h3>
+      <div class="row"><label>在线电机</label><span class="v" id="onlineCnt">0 / 4</span></div>
+      <div class="btns c2">
+        <button id="btn-scan">扫描总线</button>
+        <button class="ghost" id="btn-zeroall">全部设零</button>
+        <button class="ghost bad" id="btn-estop">急停</button>
+        <button class="ghost" id="btn-clear">解除急停</button>
+      </div>
+      <div class="hint" id="scanRes" style="margin-top:10px">点击“扫描总线”识别 CAN 反馈 ID。</div>
+    </div>
+    <div id="idlist"></div>
+  </section>
+
+  <!-- 2 拉簧 A/B -->
+  <section class="page" id="pg1">
+    <div class="hint" style="margin-bottom:10px">两个 M3508 同步驱动拉簧。标准位 = 0 圈，预备位 = x 圈。</div>
+  </section>
+
+  <!-- 3 扳机丝杆 + 舵机 -->
+  <section class="page" id="pg2"></section>
+
+  <!-- 4 Yaw -->
+  <section class="page" id="pg3">
+    <div class="card">
+      <h3>视觉绿光 <span class="tag" id="visTag">--</span></h3>
+      <div class="vision">
+        <div class="vbar"><div class="tgt"></div><div class="mark" id="visMark" style="left:50%"></div></div>
+        <span class="v" id="visErr" style="min-width:56px;text-align:right">--</span>
+      </div>
+      <div class="row"><label>当前 x / 中心</label><span class="v" id="visX">-- / --</span></div>
+    </div>
+  </section>
+
+  <!-- 5 总控 -->
+  <section class="page" id="pg4">
+    <div class="card">
+      <h3>四电机总控 <span class="tag">正式驱动</span></h3>
+      <button class="bad wide" id="btn-stopall">全部停止</button>
+    </div>
+    <div id="master"></div>
+    <div class="card">
+      <h3>执行器 <span class="tag">拉簧 / 舵机</span></h3>
+      <div class="btns c4">
+        <button class="ghost" id="btn-springstd">拉簧标准</button>
+        <button id="btn-springprep">拉簧预备</button>
+        <button class="ghost" id="btn-servostd">舵机标准</button>
+        <button id="btn-servoprep">舵机预备</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6 自动化 -->
+  <section class="page" id="pg5"></section>
+</main>
+
+<button class="estop" id="btn-estop2">急停</button>
+<nav class="tabbar" id="tabbar"></nav>
+<div class="toast" id="toast"></div>
+
+<script src="/js/motor.js"></script>
+<script src="/js/yaw.js"></script>
+<script src="/js/servo.js"></script>
+<script src="/js/task.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+include_directories(${CMAKE_CURRENT_LIST_DIR})
+
+file(GLOB ROBOT_SOURCES
+        "${CMAKE_CURRENT_LIST_DIR}/*.c"
+)
+
+list(APPEND SOURCES ${ROBOT_SOURCES})

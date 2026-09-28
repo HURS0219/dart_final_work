@@ -7,6 +7,7 @@ __pycache__/
 build/
 Debug/
 cmake-build-*/
+make_one/build_*/
 *.o
 *.elf
 *.hex

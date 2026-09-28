@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#0b0f14">
+<title>制导飞镖舵面</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="topbar">
+  <div class="brand">制导飞镖 · 舵面</div>
+  <div class="pill" id="pill"><span class="dot"></span><span id="pillTxt">未连接</span></div>
+</div>
+
+<main>
+  <!-- 制导姿态 -->
+  <div class="card">
+    <h3>制导姿态 <span class="tag" id="modeTag">--</span></h3>
+    <div class="row"><label>Pitch</label><input type="range" id="gP" min="-100" max="100" value="0"><span class="v" id="gPv">0.00</span></div>
+    <div class="row"><label>Yaw</label><input type="range" id="gY" min="-100" max="100" value="0"><span class="v" id="gYv">0.00</span></div>
+    <div class="row"><label>Roll</label><input type="range" id="gR" min="-100" max="100" value="0"><span class="v" id="gRv">0.00</span></div>
+    <div class="btns c2">
+      <button id="btn-guid">进入制导</button>
+      <button class="ghost" id="btn-mid">姿态归零</button>
+    </div>
+    <div class="hint" style="margin-top:8px">拖动滑块即时下发姿态指令；点“进入制导”使舵面跟随制导输出。</div>
+  </div>
+
+  <!-- 舵面手动 -->
+  <div id="servoList"></div>
+</main>
+
+<div class="toast" id="toast"></div>
+<script src="/js/servo.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>
