@@ -65,15 +65,41 @@
 
 ## 4. 本分支实现
 
-- `dart_final_cfg.h`：
-  - `GUID_ROLL_DEC_ENABLE`（1=启用旋转解耦，允许自旋；0=传统稳滚）
-  - `GUID_ROLL_SIGN`（γ 符号，装反取 -1）
-  - `GUID_ROLL_OFFSET_DEG`（γ 机械零点偏置）
-- `app/guidance.c`：
-  - 制导律仍输出 `a_cmd` → 空间水平指令 `ay_space = GUID_GAIN_K * a_cmd`，`az_space = 0`。
-  - 启用时用 `s_att.roll_deg`(=γ) 做 `R(γ)` 变换，得到体轴 `yaw/pitch`，**不再稳滚**（`roll=0`）。
-  - 关闭时退回传统“仅控 yaw + roll PID”。
-- 滚转角来源：`imu` app 发布的 `attitude.roll_deg`（BMI088 + 姿态解算）。
+### 4.1 完整流水线（`app/guidance.c`）
+```text
+相机(随机体滚) -> 像素(x,y) [体轴]
+   │  [输入解旋] R⁻¹(γ):  xs = dxb·cosγ + dyb·sinγ
+   ▼
+空间视线角 λ = xs/focal  -> dλ(微分+低通, 在空间系算)
+   │
+   ▼  png_ai
+空间横向指令 (ay_space, az_space=0)
+   │  [输出旋转+相位超前] R(γ_eff), γ_eff = γ + ω·τ_lead
+   ▼
+体轴 (yaw_body, pitch_body) -> servo_mix_ai -> 4 舵机
+```
+> **注意**：输入解旋与输出旋转互为逆；中间必须在“空间系”里微分/滤波，否则 `dλ` 会混入伪速率 `γ̇·λ`。
+
+### 4.2 关键 cfg（`dart_final_cfg.h`）
+- `GUID_ROLL_DEC_ENABLE`（1=启用；0=传统稳滚）
+- `GUID_ROLL_SIGN` / `GUID_ROLL_OFFSET_DEG`（γ 符号 / 零点偏置）
+- `GUID_DEROT_IN_ENABLE` / `GUID_IN_ROT_SIGN`（**输入侧解旋**，默认开）
+- `GUID_LEAD_MS`（**相位超前**，补偿舵机滞后）
+
+### 4.3 为什么“不止一行”
+| 必需项 | 说明 |
+|---|---|
+| 输入解旋 | 相机随机体滚，像素是体轴坐标；不解旋则方向错、dλ 混入 γ̇·λ |
+| 输出旋转 | 核心 2×2 旋转（简单） |
+| 相位超前 | 舵机滞后 τ → 用 γ+ω·τ 补偿，否则系统偏 ωτ |
+| 陀螺 | 量程/带宽/连续性/零偏温漂 + 起飞前静止校准 |
+| 残余耦合 | 马格努斯/陀螺交叉，旋转矩阵**消不掉**（需 ADRC/补偿项） |
+| 带宽匹配 | 自旋速度必须 < 舵机有效带宽（50Hz PWM ≈ 几 Hz） |
+| 配平/符号 | 零位与符号错 → 锥形运动；须地面标定 |
+
+- 滚转角来源：`imu` app 发布的 `attitude.roll_deg`（BMI088 + 姿态解算）；角速率用 `attitude.gx_dps`。
+- 关闭 `GUID_ROLL_DEC_ENABLE` 时退回传统“仅控 yaw + roll PID”。
+
 
 ---
 

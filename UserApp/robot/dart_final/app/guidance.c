@@ -1,20 +1,21 @@
 /*
  * guidance.c — 制导+控制 app 实现  [roll_dec 分支: 旋转解耦(路线二)]
  * =============================================================================
- * 数据流:  订阅 "attitude"/"target"
- *          -> 由目标像素求水平视线角 λ = (x-CX)/focal
- *          -> 内部微分 + 一阶低通得到 dλ (png_ai 只吃 dλ)
- *          -> png_ai 解算横向加速度 a_cmd (m/s^2)
- *          -> 控制:
- *               [旋转解耦开启] 弹体自由滚转; 用滚转角 γ 把"空间指令"旋转到弹体坐标系:
- *                   yaw_body   =  ay_space*cosγ + az_space*sinγ
- *                   pitch_body = -ay_space*sinγ + az_space*cosγ
- *               [关闭] 传统: 仅控 yaw, 用 roll PID 稳滚(见 dart_final_cfg.h 开关)
- *          -> 发布 "mix"
+ * 完整流水线(允许弹体自旋; 舵面随弹体滚, 算法补偿):
+ *   1) 相机随机体滚 -> 像素(x,y)是"体轴坐标";
+ *      [输入解旋] 用 R⁻¹(γ) 把体轴像素解旋成"空间视线" -> 取空间水平分量 λ = xs/focal;
+ *      (关键: 必须先解旋再微分, 否则世界水平被旋转, 且 dλ 混入伪速率 γ̇·λ)
+ *   2) dλ = 微分 + 一阶低通(在空间系);
+ *   3) a_cmd = png_ai(dλ, v_c) -> 空间系横向指令 (ay_space = k*a_cmd, az_space = 0);
+ *   4) [输出旋转 + 相位超前] 用 γ_eff = γ + ω·τ_lead 把空间指令旋到体轴:
+ *         yaw_body   =  ay_space*cos(γ_eff) + az_space*sin(γ_eff)
+ *         pitch_body = -ay_space*sin(γ_eff) + az_space*cos(γ_eff)
+ *      (τ_lead 补偿舵机响应滞后; 不再做滚转稳定)
+ *   5) 发布 "mix"
  *
- * 说明: 目标水平移动, 垂直不控 => az_space = 0; 因此本质是"水平指令按 γ 分配到体轴"。
- *       旋转解耦让舵面随弹体一起滚也能产生正确的空间方向(不做滚转稳定)。
- *       详见本分支 `roll_dec.md`。k 仍取物理值 1/PNG_MAX_OUT; “过偏”调 SERVO_MIX_MAX_DEG。
+ * 坐标/符号约定(可现场标定, 见 dart_final_cfg.h):
+ *   纵轴 x; 横向面 (y=右, z=上)。γ 为正 = 绕 x 正方向滚转。
+ * 详见本分支 `roll_dec.md`。k 仍取物理值 1/PNG_MAX_OUT; “过偏”调 SERVO_MIX_MAX_DEG。
  * =============================================================================
  */
 #include "guidance.h"
@@ -43,8 +44,8 @@ static Dart_Target_s s_tgt;
 static Dart_Mix_s s_mix;
 
 static uint8_t s_los_started = 0;
-static float s_los_prev = 0.0f; /* 上次视线角 */
-static float s_dlambda = 0.0f;  /* 滤波后的视线角速率 */
+static float s_los_prev = 0.0f; /* 上次“空间”视线角 */
+static float s_dlambda = 0.0f;  /* 滤波后的“空间”视线角速率 */
 static Dart_AppStatus_s s_st;
 
 static float Clamp(float v, float lo, float hi) {
@@ -87,13 +88,15 @@ void Guidance_Task(float dt, uint8_t guide_enable) {
   uint32_t t0 = (uint32_t)DWT_GetTimeline_us();
   Dart_Attitude_s a;
   Dart_Target_s t;
+  float gamma_deg;    /* 滚转角 γ(含零点偏置) */
+  float omega_dps;    /* 滚转角速率 ω(deg/s) */
   float lambda = 0.0f;
   float d_raw = 0.0f;
   float a_cmd = 0.0f;
   float ay_space = 0.0f; /* 空间系横向指令(水平) */
   float az_space = 0.0f; /* 空间系横向指令(垂直), 本机不控高 => 0 */
   float yaw = 0.0f;
-  float pitch = 0.0f; /* roll_dec 分支: 体轴俯仰指令(旋转解耦时非 0) */
+  float pitch = 0.0f;
   float roll = 0.0f;
   uint8_t vision_ok;
   uint8_t failsafe;
@@ -104,10 +107,24 @@ void Guidance_Task(float dt, uint8_t guide_enable) {
   if (SubGetMessage(s_sub_tgt, &t)) s_tgt = t;
   vision_ok = s_tgt.found ? 1u : 0u;
 
-  /* 2) 目标像素 -> 水平视线角 -> 视线角速率(微分 + 一阶低通) */
+  gamma_deg = s_att.roll_deg + GUID_ROLL_OFFSET_DEG; /* γ */
+  omega_dps = s_att.gx_dps;                          /* roll 角速率 */
+
+  /* 2) [输入解旋] 体轴像素 -> 空间水平视线角 λ; 再微分 + 低通 */
   if (vision_ok) {
-    float dx = (float)s_tgt.x - GUID_IMAGE_CX;
-    lambda = dx / GUID_FOCAL_PX;
+    float dxb = (float)s_tgt.x - GUID_IMAGE_CX; /* 体轴水平像素偏移 */
+    float dxs = dxb;
+#if GUID_DEROT_IN_ENABLE
+    {
+      float gi = gamma_deg * GUID_IN_ROT_SIGN * DEG2RAD; /* R⁻¹(γ) */
+      float dyb = (float)s_tgt.y - GUID_IMAGE_CY;
+      float c = cosf(gi);
+      float s = sinf(gi);
+      /* 空间 = R(-γ)·体轴: xs = dxb·c + dyb·s (仅取水平分量) */
+      dxs = dxb * c + dyb * s;
+    }
+#endif
+    lambda = dxs / GUID_FOCAL_PX;
     if (s_los_started && dt > 0.0f) d_raw = (lambda - s_los_prev) / dt;
     s_los_prev = lambda;
     s_los_started = 1;
@@ -125,12 +142,13 @@ void Guidance_Task(float dt, uint8_t guide_enable) {
 
   /* 4) 控制 */
 #if GUID_ROLL_DEC_ENABLE
-  /* ---- 路线二: 旋转解耦(允许自旋, 用 γ 把空间指令旋转到弹体坐标系) ---- */
+  /* ---- 路线二: 输出旋转 + 相位超前(允许自旋, 不再稳滚) ---- */
   {
-    float g = (s_att.roll_deg + GUID_ROLL_OFFSET_DEG) * GUID_ROLL_SIGN * DEG2RAD;
+    float ge = gamma_deg + omega_dps * (GUID_LEAD_MS / 1000.0f); /* γ_eff (deg) */
+    float g = ge * GUID_ROLL_SIGN * DEG2RAD;
     float c = cosf(g);
     float s = sinf(g);
-    yaw = ay_space * c + az_space * s;   /* 体轴 yaw */
+    yaw = ay_space * c + az_space * s;    /* 体轴 yaw */
     pitch = -ay_space * s + az_space * c; /* 体轴 pitch */
     roll = 0.0f;                          /* 不再稳滚 */
   }
@@ -158,7 +176,7 @@ void Guidance_Task(float dt, uint8_t guide_enable) {
 
   s_st.hb++;
   s_st.dt_us = (float)(DWT_GetTimeline_us() - t0);
-  s_st.key = a_cmd; /* 关键量: a_cmd (调试亦可看 s_att.roll_deg=γ) */
+  s_st.key = a_cmd; /* 关键量: a_cmd; 调试可同时看 s_att.roll_deg=γ */
   s_st.err = DART_ERR_NONE;
 }
 
