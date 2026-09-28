@@ -129,7 +129,26 @@ powershell -ExecutionPolicy Bypass -File make_one\build.ps1 -Robot <robot> -Boar
 
 ## 10. 参考
 
+- **根 `README.md`（仓库总览 / GitHub 主页）**：项目结构 + `main` 实现了什么 + 各分支介绍。
 - `UserApp/application.md`、`UserApp/APP层应用编写指引.md`（app 规范）。
 - `Bsp/flash/README.md`、`Modules/motor/servo_motor/README.md`、`Modules/algorithm/servo_mix_ai/servo_mix_ai.md`、`Modules/algorithm/png_ai/README.md`。
 - `UserApp/robot/dart_final/README.md`（整机飞控详解）。
 - `Tools/agent_profile.md`（本 agent 的方法论与教训）。
+
+---
+
+## 11. 分支与版本
+
+**分支**（`main` 为稳定主线；其余为研发分支）：
+| 分支 | 主题 | 状态 |
+|---|---|---|
+| `main` | 主线：框架 + 模块 + `dart_final` 整机飞控 + `Tools` | 稳定 |
+| `smc` | 滑模稳滚（`Modules/algorithm/smc_ai`） | 实验，不合并 |
+| `adrc` | 自抗扰稳滚（`Modules/algorithm/adrc_ai`） | 实验，不合并 |
+| `roll_dec` | 旋转解耦（路线二：γ 旋转空间指令到体轴） | 实验，不合并 |
+| `esp` | ESP32 无线（网页 + 无线烧录，替代 SWD） | 规划中 |
+
+**关键约定**：
+- 切换分支会按目标分支切换**已跟踪**文件（只在该分支存在的文件会从工作区消失，切回即恢复）；**未跟踪文件/空目录不受影响**。
+- 三条姿态控制分支为**独立实验版**，不并入 `main`；后期若要合并，用 `ROLL_CTRL_MODE` 切换控制器（会显著增加复杂度，谨慎）。
+- 版本 tag：`1.0.0 ~ 1.0.5`（`1.0.4`=Tools 档案，`1.0.5`=根 README 总览）。
