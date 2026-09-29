@@ -11,6 +11,11 @@
  *   - 日志: 每 LOG_PERIOD_MS 打一条(供 MATLAB); fs=1 时附一行 fsreason;
  *   - 控制台: 经 J-Link RTT(下行通道0) 输入命令; 与 Tools/scripts/rtt_send.ps1 配合。
  *
+ * 命令通道: 同时支持
+ *   1) 板载 USB-CDC 虚拟串口(插 USB -> PC COM 口; 供 Tools/gui 可视化上位机);
+ *   2) J-Link RTT(下行通道0; 与 Tools/scripts/rtt_send.ps1 配合)。
+ *   命令/输出格式两者一致; 无 USB 时不插也不影响。
+ *
  * 命令:
  *   PING                      -> PONG
  *   ATT,<roll>,<pitch>,<yaw>  注入姿态(发布 attitude)
@@ -32,6 +37,7 @@
 #include "SEGGER_RTT.h"
 #include "bsp_dwt.h"
 #include "bsp_log.h"
+#include "bsp_usb.h"
 #include "dart_final_cfg.h"
 #include "message_center.h"
 #include "robot_def.h"
@@ -68,13 +74,36 @@ static uint8_t s_has_att, s_has_tgt, s_has_mix, s_has_fb;
 static uint32_t s_hb_last[A_CNT];
 static uint32_t s_hb_stale[A_CNT];
 
-/* ===================== 控制台行缓冲(RTT) ===================== */
+/* ===================== 控制台行缓冲(USB-CDC 环形 + RTT) ===================== */
 static char s_line[64];
 static uint8_t s_len = 0;
 
+/* USB-CDC 接收: 中断上下文只入环形缓冲, 任务上下文解析 */
+#define RX_RING_SZ 128
+static volatile char s_ring[RX_RING_SZ];
+static volatile uint8_t s_rh = 0, s_wh = 0;
+static uint8_t *s_usb_rx = NULL;
+
+/**
+ * @brief USB-CDC 接收回调(中断上下文): 仅入队, 满了丢弃(简单可靠)
+ */
+static void UsbRxCallback(uint16_t len) {
+  if (s_usb_rx == NULL) return;
+  for (uint16_t i = 0; i < len; i++) {
+    uint8_t next = (uint8_t)((s_wh + 1) % RX_RING_SZ);
+    if (next != s_rh) {
+      s_ring[s_wh] = (char)s_usb_rx[i];
+      s_wh = next;
+    }
+  }
+}
+
 /* ===================== 工具 ===================== */
+/* 回复一段文本: 同时走 USB-CDC 与 RTT(可任选其一观察) */
 static void Reply(const char *s) {
-  if (s != NULL) SEGGER_RTT_WriteString(0, s);
+  if (s == NULL) return;
+  if (s_usb_rx != NULL) USBTransmit((uint8_t *)s, (uint16_t)strlen(s));
+  SEGGER_RTT_WriteString(0, s);
 }
 
 static uint32_t NowMs(void) { return (uint32_t)DWT_GetTimeline_ms(); }
@@ -130,19 +159,22 @@ static const char *FsReason(void) {
   return buf;
 }
 
-/* 打印一条话题状态行。注: nano.specs 默认禁用 %f, 故浮点用“整数定标”输出(x10 / x100)。 */
-static void PrintTopic(uint32_t sec, int topic) {
-  char buf[240];
+/* 把一条话题状态行写进 dst 尾部(含换行), 返回写入长度。
+ * 注: nano.specs 默认禁用 %f, 故浮点用“整数定标”输出(x10 / x100)。 */
+static size_t AppendTopic(char *dst, size_t cap, uint32_t sec, int topic) {
+  char line[240];
   uint32_t now = NowMs();
   int prod = kProducer[topic], cons = kConsumer[topic];
   uint8_t producer_alive = (prod >= 0 && s_app_en[prod]) ? AppAlive(prod) : 0;
   uint8_t sub_alive = (cons >= 0 && s_app_en[cons]) ? AppAlive(cons) : 0;
   uint8_t data = 0;
 
+  if (cap == 0) return 0;
+
   switch (topic) {
     case T_ATTITUDE:
       data = (s_has_att && (now - s_t_att) <= DATA_FRESH_MS) ? 1 : 0;
-      snprintf(buf, sizeof(buf),
+      snprintf(line, sizeof(line),
                "[t=%04us] %-8s prod=%-7s:%u sub=%-8s:%u data=%u | roll10=%d pitch10=%d yaw10=%d "
                "gx10=%d gy10=%d gz10=%d valid=%u\n",
                sec, kTopicName[topic], prod >= 0 ? kAppName[prod] : "-", producer_alive,
@@ -153,14 +185,14 @@ static void PrintTopic(uint32_t sec, int topic) {
       break;
     case T_TARGET:
       data = (s_has_tgt && (now - s_t_tgt) <= DATA_FRESH_MS) ? 1 : 0;
-      snprintf(buf, sizeof(buf),
+      snprintf(line, sizeof(line),
                "[t=%04us] %-8s prod=%-7s:%u sub=%-8s:%u data=%u | x=%d y=%d found=%u\n", sec,
                kTopicName[topic], prod >= 0 ? kAppName[prod] : "-", producer_alive,
                cons >= 0 ? kAppName[cons] : "-", sub_alive, data, s_m_tgt.x, s_m_tgt.y, s_m_tgt.found);
       break;
     case T_MIX:
       data = (s_has_mix && (now - s_t_mix) <= DATA_FRESH_MS) ? 1 : 0;
-      snprintf(buf, sizeof(buf),
+      snprintf(line, sizeof(line),
                "[t=%04us] %-8s prod=%-7s:%u sub=%-8s:%u data=%u | p100=%d y100=%d r100=%d fs=%u\n",
                sec, kTopicName[topic], prod >= 0 ? kAppName[prod] : "-", producer_alive,
                cons >= 0 ? kAppName[cons] : "-", sub_alive, data, (int)(s_m_mix.pitch * 100.0f),
@@ -168,7 +200,7 @@ static void PrintTopic(uint32_t sec, int topic) {
       break;
     default: /* T_SERVO_FB */
       data = (s_has_fb && (now - s_t_fb) <= DATA_FRESH_MS) ? 1 : 0;
-      snprintf(buf, sizeof(buf),
+      snprintf(line, sizeof(line),
                "[t=%04us] %-8s prod=%-7s:%u sub=%-8s:%u data=%u | d10=%d,%d,%d,%d p=%d,%d,%d,%d\n",
                sec, kTopicName[topic], prod >= 0 ? kAppName[prod] : "-", producer_alive,
                cons >= 0 ? kAppName[cons] : "-", sub_alive, data, (int)(s_m_fb.defl_deg[0] * 10.0f),
@@ -177,26 +209,34 @@ static void PrintTopic(uint32_t sec, int topic) {
                (int)s_m_fb.pulse_us[2], (int)s_m_fb.pulse_us[3]);
       break;
   }
-  Reply(buf);
+
+  {
+    size_t n = strlen(line);
+    if (n > cap - 1) n = cap - 1;
+    memcpy(dst, line, n);
+    dst[n] = '\0';
+    return n;
+  }
 }
 
-/* 打印整表 */
+/* 打印整表: 整块拼好后一次 Reply(避免 USB-CDC 连续发送 USBD_BUSY 丢行) */
 static void PrintTable(uint8_t with_app, uint32_t sec) {
-  char buf[160];
+  static char out[768];
+  size_t used = 0;
+
   if (with_app) {
-    snprintf(buf, sizeof(buf),
-             "[t=%04us] apps: IMU:%u VISION:%u GUIDANCE:%u FIN:%u\n", sec,
-             AppAlive(A_IMU), AppAlive(A_VISION), AppAlive(A_GUID), AppAlive(A_FIN));
-    Reply(buf);
+    int n = snprintf(out, sizeof(out), "[t=%04us] apps: IMU:%u VISION:%u GUIDANCE:%u FIN:%u\n", sec,
+                     AppAlive(A_IMU), AppAlive(A_VISION), AppAlive(A_GUID), AppAlive(A_FIN));
+    if (n > 0) used = ((size_t)n < sizeof(out)) ? (size_t)n : (sizeof(out) - 1);
   }
-  PrintTopic(sec, T_ATTITUDE);
-  PrintTopic(sec, T_TARGET);
-  PrintTopic(sec, T_MIX);
-  PrintTopic(sec, T_SERVO_FB);
+  used += AppendTopic(out + used, sizeof(out) - used, sec, T_ATTITUDE);
+  used += AppendTopic(out + used, sizeof(out) - used, sec, T_TARGET);
+  used += AppendTopic(out + used, sizeof(out) - used, sec, T_MIX);
+  used += AppendTopic(out + used, sizeof(out) - used, sec, T_SERVO_FB);
   if (s_has_mix && s_m_mix.failsafe) {
-    snprintf(buf, sizeof(buf), "[t=%04us]   fsreason=%s\n", sec, FsReason());
-    Reply(buf);
+    snprintf(out + used, sizeof(out) - used, "[t=%04us]   fsreason=%s\n", sec, FsReason());
   }
+  Reply(out);
 }
 
 /* ===================== 控制台命令 ===================== */
@@ -344,6 +384,12 @@ void RobotInit(void) {
 
   (void)DWT_GetDeltaT(&robot->DWT_CNT); /* 初始化 dt 基准 */
 
+  /* 命令通道: 板载 USB-CDC 虚拟串口(接收 -> 中断环形缓冲); 未插 USB 也无害 */
+  USB_Init_Config_s usb_cfg;
+  usb_cfg.tx_cbk = NULL;
+  usb_cfg.rx_cbk = UsbRxCallback;
+  s_usb_rx = USBInit(usb_cfg);
+
   LOGINFO("[dart_test] init done (IMU_EN=%d VISION_EN=%d)", TEST_IMU_ENABLE, TEST_VISION_ENABLE);
   Reply("\r\n=== dart_final_test_app ready ===\r\n"
         "cmds: PING | ATT,<r>,<p>,<y> | TGT,<x>,<y> | TGTN | FMIX,<p>,<y>,<r> | FIN,<ch>,<deg> | "
@@ -363,8 +409,13 @@ void RobotTask(void) {
   if (s_app_en[A_GUID]) Guidance_Task(robot->dt, 1u);
   if (s_app_en[A_FIN]) Fin_Task();
 
-  /* 2) 监视 + 控制台(只收命令, 不刷屏) */
+  /* 2) 监视 + 控制台(USB-CDC 环形缓冲 + RTT; 只收命令, 不刷屏) */
   MonitorUpdate();
+  while (s_rh != s_wh) {
+    char c = s_ring[s_rh];
+    s_rh = (uint8_t)((s_rh + 1) % RX_RING_SZ);
+    ParseByte(c);
+  }
   ConsolePoll();
 
   /* 3) 可选周期日志: LOG_PERIOD_MS=0(默认) -> 完全静默, 只在 STAT 时打印一次;

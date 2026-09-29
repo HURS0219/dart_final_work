@@ -2,7 +2,7 @@
 
 <p align='right'>ai @ dart_final_work</p>
 
-用于**逐个黑盒测试** `dart_final` 的各 app 服务，**无需 IMU / 视觉 / ESP32 硬件**即可在台架上验证：
+用于**逐个黑盒测试** `dart_final` 的各 app 服务：姿态可用**真实 IMU**（C 板板载 BMI088）或注入，视觉/ESP32 未就绪也能在台架上验证：
 自底向上 **fin（舵机）→ guidance → vision / imu**。`test.c` 代替 `robot.c`，复用 `dart_final/app/*`。
 
 > 每个 app 当**黑盒**：只“注入它的输入、看它的输出”。例：测 guidance 就注入 `attitude`+`target`，只看它输出的 `mix`。
@@ -24,10 +24,10 @@ powershell -File Tools\scripts\flash.ps1 -Hex make_one\build_dart_final_test_app
 powershell -File Tools\scripts\reset.ps1
 ```
 
-## 3. 命令通道（RTT）
-经 **J-Link RTT**（SWD 终端）输入命令，二选一：
-- **RTT Viewer**：窗口底部输入框打字回车；
-- **脚本**：`Tools\scripts\rtt_send.ps1 -Cmd "<命令>" -Elf make_one\build_dart_final_test_app\control-2026.elf`
+## 3. 命令通道（USB-CDC 串口 / RTT）
+同时支持两路，命令与输出完全一致：
+- **板载 USB-CDC 虚拟串口**（板子 USB 插电脑 → 出现 COM 口，波特率随意，如 115200）：给 `Tools/gui` 可视化上位机用；
+- **J-Link RTT**（SWD）：RTT Viewer 底部输入框，或 `Tools\scripts\rtt_send.ps1 -Cmd "<命令>" -Elf make_one\build_dart_final_test_app\control-2026.elf`。
 
 ### 命令表
 | 命令 | 作用 |
@@ -87,7 +87,7 @@ powershell -File Tools\scripts\reset.ps1
 ## 7. 配置（`test_cfg.h`）
 | 宏 | 默认 | 说明 |
 |---|---|---|
-| `TEST_IMU_ENABLE` | 0 | 0=不初始化真实 IMU（**避免无 BMI088 时 `INS_Init` 死等**），用 `ATT` 注入 |
+| `TEST_IMU_ENABLE` | 1 | 1=初始化真实 BMI088（C 板板载, 走 hspi1）提供真实姿态；0=跳过（无 IMU 板用 `ATT` 注入，避免 `INS_Init` 死等） |
 | `TEST_VISION_ENABLE` | 0 | 0=不注册 OpenMV 串口，用 `TGT` 注入 |
 | `LOG_PERIOD_MS` | 0 | 自动日志周期（**0=静默，仅 `STAT`**；>0 每秒一条，存档用） |
 | `DATA_FRESH_MS` | 500 | 数据“新鲜”判定窗口 |

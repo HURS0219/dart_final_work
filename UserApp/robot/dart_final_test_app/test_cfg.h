@@ -7,9 +7,9 @@
  */
 #pragma once
 
-/* ---------- 测试使能(默认用注入, 避免无硬件死等/串口干扰) ---------- */
-#define TEST_IMU_ENABLE 0    /* 0=不初始化真实 IMU(避免无 BMI088 时 INS_Init 死等), 用 ATT 注入 */
-#define TEST_VISION_ENABLE 0 /* 0=不注册 OpenMV 串口, 用 TGT 注入 */
+/* ---------- 测试使能 ---------- */
+#define TEST_IMU_ENABLE 1    /* 1=初始化真实 BMI088(C 板板载, 走 hspi1), 提供真实姿态; 0=用 ATT 注入 */
+#define TEST_VISION_ENABLE 0 /* 0=不注册 OpenMV 串口, 用 TGT 注入目标 */
 
 /* ---------- 输出周期 ---------- */
 /* 0 = 静默: 不自动输出, 只在你发 STAT 命令时打印一次状态表(推荐)。

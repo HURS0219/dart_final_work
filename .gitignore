@@ -20,3 +20,8 @@ make_one/build_*/
 !.vscode/tasks.json
 !.vscode/settings.json
 !.vscode/extensions.json
+
+# GUI 打包产物
+Tools/gui/build/
+Tools/gui/dist/
+Tools/gui/*.spec
