@@ -22,6 +22,29 @@ powershell -File Tools\scripts\build_all.ps1 -Board GIMBAL_BOARD
 powershell -File Tools\scripts\flash.ps1 -Hex make_one\build_dart_final\control-2026.hex [-Device STM32F407IG]
 ```
 
+### `oneclick_flash.ps1` — 一键编译 + 烧录（VS Code 任务的后端）
+一步完成「编译指定 robot → 用 J-Link 烧录」。封装 `build.ps1` + `flash.ps1`，被 `.vscode/tasks.json` 调用，也可命令行用。
+```powershell
+powershell -File Tools\scripts\oneclick_flash.ps1 -Robot dart_final                 # 编译 + 烧录
+powershell -File Tools\scripts\oneclick_flash.ps1 -Robot dart_final_test_app        # 换 robot
+powershell -File Tools\scripts\oneclick_flash.ps1 -Robot servo_test -Clean          # 清洁重编 + 烧录
+powershell -File Tools\scripts\oneclick_flash.ps1 -Robot dart_final -NoBuild        # 只烧录已有 hex
+powershell -File Tools\scripts\oneclick_flash.ps1 -Robot dart_final -NoFlash        # 只编译不烧录
+powershell -File Tools\scripts\oneclick_flash.ps1 -Robot dart_final -Device STM32H723ZG
+```
+`-Device` 缺省按板子推断（`GIMBAL_BOARD`/`ONE_BOARD`→`STM32F407IG`，`CHASSIS_BOARD`→`STM32H723ZG`），可覆盖。
+
+### VS Code 一键烧录（`.vscode/`）
+仓库已随附 `.vscode/tasks.json`（+`settings.json`/`extensions.json`），装好推荐插件后即可用：
+- **`Ctrl+Shift+B`** → 默认任务 **「Flash: 一键烧录 dart_final (Build+Flash)」**（编译+烧录一步到位）。
+- 命令面板 `Tasks: Run Task` → 可选：
+  - `Flash: 一键烧录 dart_final_test_app`；
+  - `Flash: 一键烧录 (选择 robot)` / `仅烧录, 不编译` / `清洁重编 + 烧录`（会弹出 robot、board 选择）；
+  - `Build: 仅编译 (选择 robot)`、`Build: 编译全部 robot (回归)`；
+  - `Board: 复位并运行 (Reset)`。
+- 依赖外部命令：`powershell`（系统自带）、`cmake`+`ninja`、`arm-none-eabi` 工具链、`JLink.exe`（路径见 `flash.ps1` 的 `-JLink`，默认 `C:\Program Files\SEGGER\JLink_V966\JLink.exe`）。
+- `.gitignore` 只放行上述 3 个共享配置文件，其余 `.vscode/*` 仍被忽略（个人设置不入库）。
+
 ### `reset.ps1` — 复位并运行
 ```powershell
 powershell -File Tools\scripts\reset.ps1 [-Device STM32F407IG]

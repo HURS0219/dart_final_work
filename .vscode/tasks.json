@@ -1,0 +1,183 @@
+{
+  "version": "2.0.0",
+  "inputs": [
+    {
+      "id": "robot",
+      "type": "pickString",
+      "description": "选择 robot (UserApp/robot/<name>)",
+      "default": "dart_final",
+      "options": [
+        "dart_final",
+        "dart_final_test_app",
+        "servo_test",
+        "dart_fc",
+        "dart",
+        "dart_servo_v0.2",
+        "dart_launcher_web_v5_HIK",
+        "hero_mecanum_example1",
+        "infantry_six_wheel_example2"
+      ]
+    },
+    {
+      "id": "board",
+      "type": "pickString",
+      "description": "选择开发板 (BOARD_TYPE)",
+      "default": "GIMBAL_BOARD",
+      "options": [
+        "GIMBAL_BOARD",
+        "CHASSIS_BOARD",
+        "ONE_BOARD"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "label": "Flash: 一键烧录 dart_final (Build+Flash)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\Tools\\scripts\\oneclick_flash.ps1",
+        "-Robot",
+        "dart_final",
+        "-Board",
+        "GIMBAL_BOARD"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$gcc"],
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true }
+    },
+    {
+      "label": "Flash: 一键烧录 dart_final_test_app (Build+Flash)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\Tools\\scripts\\oneclick_flash.ps1",
+        "-Robot",
+        "dart_final_test_app",
+        "-Board",
+        "GIMBAL_BOARD"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$gcc"],
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true }
+    },
+    {
+      "label": "Flash: 一键烧录 (选择 robot)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\Tools\\scripts\\oneclick_flash.ps1",
+        "-Robot",
+        "${input:robot}",
+        "-Board",
+        "${input:board}"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$gcc"],
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true }
+    },
+    {
+      "label": "Flash: 仅烧录, 不编译 (选择 robot)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\Tools\\scripts\\oneclick_flash.ps1",
+        "-Robot",
+        "${input:robot}",
+        "-Board",
+        "${input:board}",
+        "-NoBuild"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true }
+    },
+    {
+      "label": "Flash: 清洁重编 + 烧录 (选择 robot)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\Tools\\scripts\\oneclick_flash.ps1",
+        "-Robot",
+        "${input:robot}",
+        "-Board",
+        "${input:board}",
+        "-Clean"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$gcc"],
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true }
+    },
+    {
+      "label": "Build: 仅编译 (选择 robot)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\Tools\\scripts\\oneclick_flash.ps1",
+        "-Robot",
+        "${input:robot}",
+        "-Board",
+        "${input:board}",
+        "-NoFlash"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$gcc"],
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true }
+    },
+    {
+      "label": "Board: 复位并运行 (Reset)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\Tools\\scripts\\reset.ps1"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true }
+    },
+    {
+      "label": "Build: 编译全部 robot (回归)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\Tools\\scripts\\build_all.ps1",
+        "-Board",
+        "${input:board}"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$gcc"],
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true }
+    }
+  ]
+}

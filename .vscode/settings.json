@@ -1,0 +1,10 @@
+{
+  "files.encoding": "utf8",
+  "files.eol": "\r\n",
+  "files.associations": {
+    "*.h": "c"
+  },
+  "cmake.configureOnOpen": false,
+  "terminal.integrated.defaultProfile.windows": "PowerShell",
+  "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools"
+}

@@ -15,5 +15,8 @@ make_one/build_*/
 *.map
 
 # 编辑器
-.vscode/
 .idea/
+.vscode/*
+!.vscode/tasks.json
+!.vscode/settings.json
+!.vscode/extensions.json
