@@ -36,7 +36,8 @@ powershell -File Tools\scripts\oneclick_flash.ps1 -Robot dart_final -Device STM3
 
 ### VS Code 一键烧录（`.vscode/`）
 仓库已随附 `.vscode/tasks.json`（+`settings.json`/`extensions.json`），装好推荐插件后即可用：
-- **`Ctrl+Shift+B`** → 默认任务 **「Flash: 一键烧录 dart_final (Build+Flash)」**（编译+烧录一步到位）。
+- **`Ctrl+Shift+B`** → 默认任务 **「Flash: 一键烧录 (选择 robot)」**：**先弹框选 robot**（默认高亮 `dart_final`，也可选 `dart_final_test_app` 等），再选 board，然后编译+烧录 —— **杜绝误烧**（不再默认烧 `dart_final`）。
+  脚本开头会大字打印 `#### ROBOT = xxx  BOARD = xxx ####`，烧前再打印所用 hex 及其时间戳，便于确认烧的是谁。
 - 命令面板 `Tasks: Run Task` → 可选：
   - `Flash: 一键烧录 dart_final_test_app`；
   - `Flash: 一键烧录 (选择 robot)` / `仅烧录, 不编译` / `清洁重编 + 烧录`（会弹出 robot、board 选择）；

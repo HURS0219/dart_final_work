@@ -31,7 +31,7 @@
 - **协议**：OpenMV 帧 **7 字节** `AA 55 X_hi X_lo Y_hi Y_lo CRC8`（SHT75 poly0x31，CRC 覆盖 0..5），去掉了 W/H；STM32 侧 `vision.c` 解析。
 
 ## 调试工作流（脚本在 `Tools/scripts/`）
-- **一键烧录**：VS Code `Ctrl+Shift+B`（默认任务 `oneclick_flash.ps1` = 编译+烧录）；或 `Tools/scripts/oneclick_flash.ps1 -Robot <r> [-NoBuild|-NoFlash|-Clean]`。
+- **一键烧录**：VS Code `Ctrl+Shift+B`（弹框选 robot → `oneclick_flash.ps1` 编译+烧录；**不再默认烧 dart_final**）；或 `Tools/scripts/oneclick_flash.ps1 -Robot <r> [-NoBuild|-NoFlash|-Clean]`。
 - 烧录 `flash.ps1 -Hex <hex>`；复位 `reset.ps1`。
 - RTT 注入命令：`rtt_send.ps1 -Cmd "<...>" -Elf <elf>`（nm 动态解析 `_acDownBuffer`/`_SEGGER_RTT`，免硬编码）；或 RTT Viewer。
 - 读 RAM/Flash：`mem_read.py --elf --sym/--addr`（nm + JLink）。

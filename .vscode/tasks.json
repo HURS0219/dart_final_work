@@ -48,7 +48,6 @@
       ],
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": ["$gcc"],
-      "group": { "kind": "build", "isDefault": true },
       "presentation": { "reveal": "always", "panel": "shared", "clear": true }
     },
     {
@@ -87,6 +86,7 @@
       ],
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": ["$gcc"],
+      "group": { "kind": "build", "isDefault": true },
       "presentation": { "reveal": "always", "panel": "shared", "clear": true }
     },
     {

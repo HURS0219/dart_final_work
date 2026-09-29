@@ -38,6 +38,9 @@ if ([string]::IsNullOrEmpty($Device)) {
     }
 }
 
+Write-Host ""
+Write-Host ("################  ROBOT = " + $Robot + "   BOARD = " + $Board + "  ################") -ForegroundColor Yellow
+
 # 1) build (unless -NoBuild)
 if (-not $NoBuild) {
     if (-not (Test-Path -LiteralPath $BuildScript)) { Write-Error ("build.ps1 not found: " + $BuildScript); exit 1 }
@@ -58,6 +61,8 @@ if (-not (Test-Path -LiteralPath $Hex)) {
     exit 1
 }
 Write-Host ("==> Flash  robot=" + $Robot + "  device=" + $Device) -ForegroundColor Cyan
+$hexItem = Get-Item -LiteralPath $Hex
+Write-Host ("    hex: " + $Hex + "   (" + $hexItem.LastWriteTime + ")") -ForegroundColor DarkGray
 & powershell -NoProfile -ExecutionPolicy Bypass -File $FlashScript -Hex $Hex -Device $Device
 if ($LASTEXITCODE -ne 0) { Write-Error "flash failed"; exit 1 }
 
