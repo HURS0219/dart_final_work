@@ -15,3 +15,6 @@
 
 /* 1=视觉走 SPI2(从机; OpenMV 做主机); 0=走 USART3(3线串口; OpenMV 做发送方) */
 #define DF1_VISION_SPI 0
+
+/* 诊断: 1=在 USART1/3/6 同时统计收到字节数(定位板子 3pin 到底接哪路); 0=正常视觉 */
+#define DF1_UART_SCAN 1

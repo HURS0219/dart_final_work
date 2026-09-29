@@ -2,8 +2,7 @@
 """
 openmv_uart_main.py — OpenMV Cam H7 端: 3 线串口发送 7 字节帧给 STM32 (USART3)。
 ================================================================================
-匹配 STM32 侧 USART3 配置: 100000 baud, 8 数据位 + 偶校验(Even), 1 停止位。
-(即 STM32 的 WordLength=9B + Parity=EVEN == OpenMV bits=8 + parity=0)
+匹配 STM32 侧 USART3 配置: 115200 baud, 8 数据位, 无校验(8N1), 1 停止位。
 
 接线 (3 线):
     OpenMV P4 (UART3_TX) -> STM32 PC11 (USART3_RX)
@@ -19,8 +18,8 @@ import time
 from pyb import UART
 
 UART_ID = 3
-BAUD = 100000
-uart = UART(UART_ID, baudrate=BAUD, bits=8, parity=0, stop=1, timeout_char=100)
+BAUD = 115200
+uart = UART(UART_ID, baudrate=BAUD, bits=8, parity=None, stop=1, timeout_char=100)
 
 DEMO = True          # True=不用相机, x 自动来回扫; False=用 camara_ai 识别绿光
 

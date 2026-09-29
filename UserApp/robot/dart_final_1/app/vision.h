@@ -19,3 +19,9 @@ void Vision_GetTarget(Dart_Target_s *out);
 
 /* 收帧统计: ok=校验通过, bad=收到但校验失败(用于判断链路是否通) */
 void Vision_GetStats(uint32_t *ok, uint32_t *bad);
+
+/* 自检: 往视觉串口主动发一帧(HAL 结果: 0=OK, 2=TIMEOUT, 3=BUSY, 1=ERROR) */
+int Vision_TxTest(void);
+
+/* 诊断(DF1_UART_SCAN): 读 USART1/3/6 各自收到字节数 */
+void Vision_GetScan(uint32_t *c1, uint32_t *c3, uint32_t *c6);

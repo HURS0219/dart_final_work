@@ -58,26 +58,40 @@ static void VisionSpiInit(void) {
   (void)HAL_SPI_Receive_IT(&hspi2, s_buf, OPENMV_RECV_SIZE);
 }
 #else
-#include "bsp_usart.h"
 #include "usart.h"
 
-static USARTInstance *s_usart = NULL;
 static volatile uint8_t s_new_frame = 0;
 static Dart_Target_s s_rx;
+static uint8_t s_uart_buf[OPENMV_RECV_SIZE]; /* 定长 7 字节中断接收缓冲 */
 
-/** @brief 串口接收完成回调(中断上下文): 校验并解码一帧 */
-static void Vision_RxCallback(void) {
-  uint8_t *b = s_usart->recv_buff;
-  if (b[0] == OPENMV_HEAD1 && b[1] == OPENMV_HEAD2 && crc_8(b, 6) == b[6]) {
-    s_rx.x = (int16_t)((b[2] << 8) | b[3]);
-    s_rx.y = (int16_t)((b[4] << 8) | b[5]);
-    s_rx.found = !(s_rx.x == 0 && s_rx.y == 0);
-    s_new_frame = 1;
-    s_rx_ok++;
-  } else {
-    s_rx_bad++;
+#if DF1_UART_SCAN
+/* ===== 诊断: USART1/3/6 各挂 1 字节中断接收, 统计各口收到字节数 ===== */
+static uint8_t s_b1[1], s_b3[1], s_b6[1];
+static volatile uint32_t s_c1 = 0, s_c3 = 0, s_c6 = 0;
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+  if (huart->Instance == USART1) { s_c1++; (void)HAL_UART_Receive_IT(&huart1, s_b1, 1); }
+  else if (huart->Instance == USART3) { s_c3++; (void)HAL_UART_Receive_IT(&huart3, s_b3, 1); }
+  else if (huart->Instance == USART6) { s_c6++; (void)HAL_UART_Receive_IT(&huart6, s_b6, 1); }
+}
+void Vision_GetScan(uint32_t *c1, uint32_t *c3, uint32_t *c6) { if (c1) *c1 = s_c1; if (c3) *c3 = s_c3; if (c6) *c6 = s_c6; }
+#else
+/** @brief 串口接收完成回调(中断上下文): 校验并解码一帧, 随即重新武装接收 */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+  if (huart->Instance == USART3) {
+    uint8_t *b = s_uart_buf;
+    if (b[0] == OPENMV_HEAD1 && b[1] == OPENMV_HEAD2 && crc_8(b, 6) == b[6]) {
+      s_rx.x = (int16_t)((b[2] << 8) | b[3]);
+      s_rx.y = (int16_t)((b[4] << 8) | b[5]);
+      s_rx.found = !(s_rx.x == 0 && s_rx.y == 0);
+      s_new_frame = 1;
+      s_rx_ok++;
+    } else {
+      s_rx_bad++;
+    }
+    (void)HAL_UART_Receive_IT(&huart3, s_uart_buf, OPENMV_RECV_SIZE);
   }
 }
+#endif
 #endif
 
 void Vision_Init(void) {
@@ -89,15 +103,28 @@ void Vision_Init(void) {
   VisionSpiInit();
   LOGINFO("[vision] SPI2 slave ready (SCK PB13/MOSI PB15/CS PB12)");
 #else
+#if DF1_UART_SCAN
+  (void)HAL_UART_Receive_IT(&huart1, s_b1, 1);
+  (void)HAL_UART_Receive_IT(&huart3, s_b3, 1);
+  (void)HAL_UART_Receive_IT(&huart6, s_b6, 1);
+  LOGINFO("[vision] UART scan armed on USART1/3/6");
+#else
   {
-    USART_Init_Config_s cfg;
-    memset(&cfg, 0, sizeof(cfg));
-    cfg.usart_handle = DART_USART_OPENMV;
-    cfg.recv_buff_size = OPENMV_RECV_SIZE;
-    cfg.module_callback = Vision_RxCallback;
-    s_usart = USARTRegister(&cfg);
-    LOGINFO("[vision] usart reg %s", (s_usart != NULL) ? "OK" : "FAIL");
+    /* 统一为 115200 8N1 (与 OpenMV 默认一致), 定长 7 字节中断接收 */
+    huart3.Init.BaudRate = 115200;
+    huart3.Init.WordLength = UART_WORDLENGTH_8B;
+    huart3.Init.Parity = UART_PARITY_NONE;
+    huart3.Init.StopBits = UART_STOPBITS_1;
+    if (HAL_UART_Init(&huart3) != HAL_OK) {
+      LOGERROR("[vision] huart3 re-init FAIL");
+    }
+    if (HAL_UART_Receive_IT(&huart3, s_uart_buf, OPENMV_RECV_SIZE) == HAL_OK) {
+      LOGINFO("[vision] USART3 RX-IT armed (115200 8N1)");
+    } else {
+      LOGERROR("[vision] USART3 RX-IT arm FAIL");
+    }
   }
+#endif
 #endif
 }
 
@@ -160,4 +187,30 @@ void Vision_GetTarget(Dart_Target_s *out) {
 void Vision_GetStats(uint32_t *ok, uint32_t *bad) {
   if (ok != NULL) *ok = s_rx_ok;
   if (bad != NULL) *bad = s_rx_bad;
+}
+
+#if !DF1_UART_SCAN
+void Vision_GetScan(uint32_t *c1, uint32_t *c3, uint32_t *c6) {
+  if (c1) *c1 = 0;
+  if (c3) *c3 = 0;
+  if (c6) *c6 = 0;
+}
+#endif
+
+/* 自检: 往视觉串口发一帧有效帧(x=160,y=120)。把 TX<->RX 短接即可自收, 验证串口链。
+ * 返回 HAL 发送结果(HAL_OK=0)。 */
+int Vision_TxTest(void) {
+#if DF1_VISION_SPI
+  return -1;
+#else
+  uint8_t f[7];
+  f[0] = OPENMV_HEAD1;
+  f[1] = OPENMV_HEAD2;
+  f[2] = 0x00;
+  f[3] = 0xA0; /* x=160 */
+  f[4] = 0x00;
+  f[5] = 0x78; /* y=120 */
+  f[6] = crc_8(f, 6);
+  return (int)HAL_UART_Transmit(DART_USART_OPENMV, f, 7, 100);
+#endif
 }

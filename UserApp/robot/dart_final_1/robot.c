@@ -56,6 +56,7 @@ static uint16_t s_fault_bits = 0; /* Monitor 汇总(含注入) */
 static uint16_t s_inj_fault = 0;  /* 【测试】注入的故障位 */
 static uint8_t s_enable = 1;      /* 【测试】使能(Dart_IsEnabled 用) */
 static float s_log_period_ms = 1000.0f; /* 【测试】遥测周期; 0=关闭 */
+static uint8_t s_txauto = 0;      /* 【测试】自动发串口自检帧(配合 STM32 TX<->RX 短接) */
 
 #define DART_FAULT_MASK (DART_ERR_IMU_OFF | DART_ERR_GUID_OFF | DART_ERR_FIN_OFF | DART_ERR_SERVO)
 
@@ -202,6 +203,13 @@ static void PrintState(void) {
            (int)s_fb_latest.pulse_us[0], (int)s_fb_latest.pulse_us[1],
            (int)s_fb_latest.pulse_us[2], (int)s_fb_latest.pulse_us[3]);
   Reply(buf);
+  {
+    uint32_t c1, c3, c6;
+    Vision_GetScan(&c1, &c3, &c6);
+    snprintf(buf, sizeof(buf), "[dart1] uartscan c1=%u c3=%u c6=%u\r\n",
+             (unsigned)c1, (unsigned)c3, (unsigned)c6);
+    Reply(buf);
+  }
 }
 
 static int ParseArgs(char *line, float *out, int n) {
@@ -277,6 +285,17 @@ static void HandleLine(char *line) {
     PrintState();
     return;
   }
+  if (strcmp(line, "TXTEST") == 0) {
+    char b[32];
+    int st = Vision_TxTest();
+    snprintf(b, sizeof(b), "TXTEST st=%d (0=OK)\r\n", st);
+    Reply(b);
+    return;
+  }
+  if (strncmp(line, "TXAUTO,", 7) == 0) {
+    s_txauto = (strtof(line + 7, NULL) != 0.0f) ? 1u : 0u;
+    return;
+  }
   if (strncmp(line, "LOG,", 4) == 0) {
     s_log_period_ms = strtof(line + 4, NULL);
     return;
@@ -349,10 +368,20 @@ void RobotInit(void) {
 
 void RobotTask(void) {
   static float acc = 0.0f;
+  static float txacc = 0.0f;
   float dt_ms;
 
   robot->dt = DWT_GetDeltaT(&robot->DWT_CNT);
   dt_ms = robot->dt * 1000.0f;
+
+  /* 自检: 自动发串口帧(每200ms), 配合 STM32 TX<->RX 短接验证接收链 */
+  if (s_txauto) {
+    txacc += dt_ms;
+    if (txacc >= 200.0f) {
+      txacc = 0.0f;
+      Vision_TxTest();
+    }
+  }
 
   /* 1) 输入 app */
   if (s_app_en[A_IMU]) Imu_Task();
