@@ -111,9 +111,8 @@ void RobotTask(void) {
 | `SERVO_MIX_SCALE[4]` | 逐路 比例/行程 |
 | `SERVO_MIX_TRIM_DEG[4]` | 逐路 零点 |
 | `SERVO_MIX_REVERSE[4]` | 逐路 方向 |
-| `SERVO_MIX_LIMIT_DEG[4]` | 逐路 逻辑角限位 |
 | `SERVO_MIX_RATE_DPS[4]` | 逐路 速率限幅 |
-| `SERVO_MIX_MAX_DEG` | 混控满偏对应的舵面角 |
+| `SERVO_MIX_MAX_DEG` | 混控满偏对应的舵面角（**同时作每路逻辑角限位**；逐路限位宏已移除） |
 | `SERVO_MIX_MATRIX` | 解耦矩阵 |
 | `SERVO_MIX_DEFAULT_MODE` | 上电模式(0=MIX, 1=MANUAL) |
 

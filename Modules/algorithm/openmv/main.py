@@ -6,7 +6,7 @@ main.py —— OpenMV 端整合（Hybrid 版：识别 + 握手 + 发送 + 复盘
     1. 等 STM32 指定制导轴(0x11=yaw / 0x22=pitch)；
     2. 初始化摄像头，回就绪串 "RPDART"；
     3. sensor.sleep(True) 休眠省电降温 → 等 0xAB 唤醒 → 等 0x55/0xFF 选模式；
-    4. 主循环：动态 ROI 识别 → 9 字节 CRC 帧发送 → LED 指示 → (可选)录像；
+    4. 主循环：动态 ROI 识别 → 7 字节 CRC 帧发送(仅 x,y) → LED 指示 → (可选)录像；
     5. 结束后：接收 STM32 文本存 data.csv，并把录像按时间戳改名。
 
 部署：把本文件与 camara_ai.py / uart_ai.py / logger_ai.py 拷到 OpenMV 根目录。
@@ -77,8 +77,8 @@ def main():
         # 5.1 识别(动态 ROI)
         x, y, w, h, found = detector.detect()
 
-        # 5.2 发送 9 字节 CRC 帧
-        link.send(x, y, w, h, found)
+        # 5.2 发送 7 字节 CRC 帧 (仅目标中心 x,y; 不再发框尺寸)
+        link.send(x, y, found)
 
         # 5.3 蓝灯心跳(每 25 帧翻转)
         if _led_run is not None and frame_cnt % 25 == 0:

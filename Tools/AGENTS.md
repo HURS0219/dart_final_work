@@ -152,3 +152,15 @@ powershell -ExecutionPolicy Bypass -File make_one\build.ps1 -Robot <robot> -Boar
 - 切换分支会按目标分支切换**已跟踪**文件（只在该分支存在的文件会从工作区消失，切回即恢复）；**未跟踪文件/空目录不受影响**。
 - 三条姿态控制分支为**独立实验版**，不并入 `main`；后期若要合并，用 `ROLL_CTRL_MODE` 切换控制器（会显著增加复杂度，谨慎）。
 - 版本 tag：`1.0.0 ~ 1.0.5`（`1.0.4`=Tools 档案，`1.0.5`=根 README 总览）。
+
+---
+
+## 12. 协议 / 模块变更登记
+
+- **OpenMV 帧 → 7 字节**：`AA 55 X_hi X_lo Y_hi Y_lo CRC8`（去掉 W,H；制导只用目标中心）。
+  OpenMV 侧 `Modules/algorithm/openmv/uart_ai/uart_ai.py`（`pack/send(x,y,found)`）；STM32 侧
+  `dart_final/app/vision.c`（`recv_buff_size=7`，`crc_8(b,6)`）；`Dart_Target_s` 为 `{x,y,found,tick}`。
+- **`servo_mix_ai` 去掉逐路限位**：删除 `SERVO_MIX_LIMIT_DEG[4]`；统一用 `SERVO_MIX_MAX_DEG`
+  作每路逻辑角限位（既混控增益又限位）。`servo_mix_ai.c` 中 `cfg.limit_deg = SERVO_MIX_MAX_DEG`。
+- **测试 app `dart_final_test_app`**：复用 `dart_final/app/*`（robot.cmake include+glob），`test.c`
+  代替 `robot.c`；RTT 控制台（`ATT/TGT/TGTN/FMIX/FIN/RESET/STAT/PING`）+ ros2 风格监视 UI + 每秒日志。

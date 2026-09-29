@@ -97,7 +97,7 @@
 #define DART_SPI_OPENMV (&hspi2)  /* BMI088 占 hspi1, 故 OpenMV 用 hspi2 */
 #define DART_USART_VOFA (&huart1) /* 预留 */
 
-/* OpenMV 9 字节帧参数 */
-#define OPENMV_RECV_SIZE 9
+/* OpenMV 7 字节帧参数 (AA 55 X_hi X_lo Y_hi Y_lo CRC8) */
+#define OPENMV_RECV_SIZE 7
 
 #endif /* DART_FINAL_CFG_H */
