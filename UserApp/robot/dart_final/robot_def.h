@@ -45,12 +45,10 @@ typedef struct {
   uint8_t valid;    /* 1=本周期姿态有效 */
 } Dart_Attitude_s;
 
-/** @brief 视觉目标(vision 发布) —— 对应 OpenMV 9 字节帧解码结果 */
+/** @brief 视觉目标(vision 发布) —— OpenMV 7 字节帧解码结果(仅目标中心) */
 typedef struct {
   int16_t x;        /* 目标中心像素 x */
   int16_t y;        /* 目标中心像素 y */
-  uint8_t w;        /* 目标框宽(像素) */
-  uint8_t h;        /* 目标框高(像素) */
   uint8_t found;    /* 1=本帧识别到绿光 */
   uint32_t tick;    /* 收到时刻(ms) */
 } Dart_Target_s;

@@ -1,16 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-uart_ai.py —— OpenMV 绿光坐标串口模块（9 字节 CRC8 帧 + 握手/触发）
+uart_ai.py —— OpenMV 绿光坐标串口模块（7 字节 CRC8 帧 + 握手/触发）
 ================================================================================
 作用：
-    1) 把坐标 (x,y,w,h) 打包成 9 字节定长帧发给 STM32；
+    1) 把坐标 (x,y) 打包成 7 字节定长帧发给 STM32；
     2) 实现与 STM32 的握手/触发协议，让 STM32 决定视觉何时开始、用哪个轴，
        并配合 main.py 里的 sensor.sleep() 发射前休眠省电降温。
 
-帧格式(定长 9 字节，大端)：
-    [0]0xAA [1]0x55 [2]X_hi [3]X_lo [4]Y_hi [5]Y_lo [6]W [7]H [8]CRC8
+帧格式(定长 7 字节，大端)：
+    [0]0xAA [1]0x55 [2]X_hi [3]X_lo [4]Y_hi [5]Y_lo [6]CRC8
     CRC8: SHT75(poly=0x31, init=0)，与 STM32 crc8 库一致
-    丢失: W=H=0, X=Y=0
+    丢失: X=Y=0
+    (制导只用目标中心 (x,y)；框尺寸 W/H 已移除, 简化串口传输)
 
 握手协议(STM32 -> OpenMV, 单字节命令)：
     0x11 = 选 yaw 轴      0x22 = 选 pitch 轴
@@ -25,7 +26,7 @@ OpenMV -> STM32:
     link.send_ready()            # 回就绪
     link.wait_wake()             # 等 0xAB 唤醒
     mode = link.wait_mode()      # 等 0x55/0xFF
-    link.send(x, y, w, h, found)
+    link.send(x, y, found)
 ================================================================================
 """
 
@@ -39,7 +40,7 @@ from pyb import UART
 # ============================================================================
 FRAME_HEADER_1 = 0xAA
 FRAME_HEADER_2 = 0x55
-UART_FRAME_LEN = 9
+UART_FRAME_LEN = 7
 
 CMD_AXIS_YAW = 0x11
 CMD_AXIS_PITCH = 0x22
@@ -72,12 +73,11 @@ class UartLink(object):
 
     # --------------------------- 打包 / 发送 --------------------------- #
     @staticmethod
-    def pack(x, y, w, h, found):
-        """打包 9 字节帧(bytearray)。"""
+    def pack(x, y, found):
+        """打包 7 字节帧(bytearray): AA 55 X_hi X_lo Y_hi Y_lo CRC8。"""
         xi, yi = int(x) & 0xFFFF, int(y) & 0xFFFF
-        wi, hi = int(w) & 0xFF, int(h) & 0xFF
         if not found:
-            xi = yi = wi = hi = 0
+            xi = yi = 0
 
         frame = bytearray(UART_FRAME_LEN)
         frame[0] = FRAME_HEADER_1
@@ -86,14 +86,12 @@ class UartLink(object):
         frame[3] = xi & 0xFF
         frame[4] = (yi >> 8) & 0xFF
         frame[5] = yi & 0xFF
-        frame[6] = wi
-        frame[7] = hi
-        frame[8] = crc8(frame[0:8])
+        frame[6] = crc8(frame[0:6])
         return frame
 
-    def send(self, x, y, w, h, found):
+    def send(self, x, y, found):
         """打包并发送一帧。"""
-        return self.uart.write(self.pack(x, y, w, h, found))
+        return self.uart.write(self.pack(x, y, found))
 
     def send_ready(self):
         """发送就绪握手串。"""
