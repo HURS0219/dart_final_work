@@ -77,6 +77,22 @@ void Vision_GetScan(uint32_t *c1, uint32_t *c3, uint32_t *c6) { if (c1) *c1 = s_
 #else
 /** @brief 串口接收完成回调(中断上下文): 校验并解码一帧, 随即重新武装接收 */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+#if DF1_VISION_UART6
+  if (huart->Instance != USART6) return;
+  {
+    uint8_t *b = s_uart_buf;
+    if (b[0] == OPENMV_HEAD1 && b[1] == OPENMV_HEAD2 && crc_8(b, 6) == b[6]) {
+      s_rx.x = (int16_t)((b[2] << 8) | b[3]);
+      s_rx.y = (int16_t)((b[4] << 8) | b[5]);
+      s_rx.found = !(s_rx.x == 0 && s_rx.y == 0);
+      s_new_frame = 1;
+      s_rx_ok++;
+    } else {
+      s_rx_bad++;
+    }
+    (void)HAL_UART_Receive_IT(&huart6, s_uart_buf, OPENMV_RECV_SIZE);
+  }
+#else
   if (huart->Instance == USART3) {
     uint8_t *b = s_uart_buf;
     if (b[0] == OPENMV_HEAD1 && b[1] == OPENMV_HEAD2 && crc_8(b, 6) == b[6]) {
@@ -90,6 +106,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
     }
     (void)HAL_UART_Receive_IT(&huart3, s_uart_buf, OPENMV_RECV_SIZE);
   }
+#endif
 }
 #endif
 #endif
@@ -110,7 +127,21 @@ void Vision_Init(void) {
   LOGINFO("[vision] UART scan armed on USART1/3/6");
 #else
   {
-    /* 统一为 115200 8N1 (与 OpenMV 默认一致), 定长 7 字节中断接收 */
+    /* 统一为 115200 8N1, 定长 7 字节中断接收 */
+#if DF1_VISION_UART6
+    huart6.Init.BaudRate = 115200;
+    huart6.Init.WordLength = UART_WORDLENGTH_8B;
+    huart6.Init.Parity = UART_PARITY_NONE;
+    huart6.Init.StopBits = UART_STOPBITS_1;
+    if (HAL_UART_Init(&huart6) != HAL_OK) {
+      LOGERROR("[vision] huart6 re-init FAIL");
+    }
+    if (HAL_UART_Receive_IT(&huart6, s_uart_buf, OPENMV_RECV_SIZE) == HAL_OK) {
+      LOGINFO("[vision] USART6 RX-IT armed (115200 8N1, PG9 RX)");
+    } else {
+      LOGERROR("[vision] USART6 RX-IT arm FAIL");
+    }
+#else
     huart3.Init.BaudRate = 115200;
     huart3.Init.WordLength = UART_WORDLENGTH_8B;
     huart3.Init.Parity = UART_PARITY_NONE;
@@ -123,6 +154,7 @@ void Vision_Init(void) {
     } else {
       LOGERROR("[vision] USART3 RX-IT arm FAIL");
     }
+#endif
   }
 #endif
 #endif
@@ -211,6 +243,10 @@ int Vision_TxTest(void) {
   f[4] = 0x00;
   f[5] = 0x78; /* y=120 */
   f[6] = crc_8(f, 6);
+#if DF1_VISION_UART6
+  return (int)HAL_UART_Transmit(&huart6, f, 7, 100);
+#else
   return (int)HAL_UART_Transmit(DART_USART_OPENMV, f, 7, 100);
+#endif
 #endif
 }
