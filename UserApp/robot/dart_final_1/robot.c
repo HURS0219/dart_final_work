@@ -184,12 +184,15 @@ static void Reply(const char *s) {
 }
 
 static void PrintState(void) {
-  char buf[200];
+  char buf[260];
+  uint32_t vok = 0, vbad = 0;
+  Vision_GetStats(&vok, &vbad);
   snprintf(buf, sizeof(buf),
-           "[dart1] state=%d fault=0x%04X en=%u imuen=%u visen=%u | hb imu=%u vis=%u guid=%u fin=%u\r\n",
+           "[dart1] state=%d fault=0x%04X en=%u imuen=%u visen=%u | hb imu=%u vis=%u guid=%u fin=%u | vis ok=%u bad=%u\r\n",
            (int)s_state, s_fault_bits, s_enable, s_app_en[A_IMU], s_app_en[A_VISION],
            (unsigned)Imu_GetStatus()->hb, (unsigned)Vision_GetStatus()->hb,
-           (unsigned)Guidance_GetStatus()->hb, (unsigned)Fin_GetStatus()->hb);
+           (unsigned)Guidance_GetStatus()->hb, (unsigned)Fin_GetStatus()->hb,
+           (unsigned)vok, (unsigned)vbad);
   Reply(buf);
   snprintf(buf, sizeof(buf),
            "[dart1] mix y100=%d r100=%d fs=%u | d10=%d,%d,%d,%d p=%d,%d,%d,%d\r\n",

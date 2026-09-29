@@ -16,3 +16,6 @@ const Dart_AppStatus_s *Vision_GetStatus(void);
 
 /* 读取最近一次目标快照(供状态机等使用) */
 void Vision_GetTarget(Dart_Target_s *out);
+
+/* 收帧统计: ok=校验通过, bad=收到但校验失败(用于判断链路是否通) */
+void Vision_GetStats(uint32_t *ok, uint32_t *bad);
