@@ -13,5 +13,5 @@
 /* 1=启用 vision app; 0=不启用(用 TGT 注入目标) */
 #define DF1_VISION_ENABLE 1
 
-/* 1=视觉走 SPI2(从机; OpenMV 做主机); 0=走 USART3(原 UART 方案) */
-#define DF1_VISION_SPI 1
+/* 1=视觉走 SPI2(从机; OpenMV 做主机); 0=走 USART3(3线串口; OpenMV 做发送方) */
+#define DF1_VISION_SPI 0

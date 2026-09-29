@@ -53,7 +53,7 @@ static void VisionSpiInit(void) {
   if (HAL_SPI_Init(&hspi2) != HAL_OK) {
     LOGERROR("[vision] SPI2 slave init FAIL");
   }
-  hspi2.Instance->CR1 |= SPI_CR1_SSI; /* 软件 NSS: 置 SSI=1(选中自己) */
+  hspi2.Instance->CR1 &= ~SPI_CR1_SSI; /* 软件 NSS: 从机需 NSS=低(SSI=0)才被选中 */
   /* 非阻塞: 中断方式收 7 字节; SPI2_IRQHandler 已在 it.c 接入 */
   (void)HAL_SPI_Receive_IT(&hspi2, s_buf, OPENMV_RECV_SIZE);
 }
