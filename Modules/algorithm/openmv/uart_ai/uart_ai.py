@@ -1,59 +1,58 @@
 # -*- coding: utf-8 -*-
 """
-uart_ai.py —— OpenMV 绿光坐标串口发送模块
+uart_ai.py —— OpenMV 绿光坐标串口模块（7 字节 CRC8 帧 + 握手/触发）
 ================================================================================
 作用：
-    把 camara_ai 识别出的绿光坐标 (x, y) 打包成定长帧，通过 UART 发给 STM32。
-    STM32 端用 Bsp/usart 的 DMA+空闲中断接收：
-        注册串口实例时 recv_buff_size = UART_FRAME_LEN(=8)，
-        在 module_callback 里校验帧头 + CRC8 后取出 x、y。
+    1) 把坐标 (x,y) 打包成 7 字节定长帧发给 STM32；
+    2) 实现与 STM32 的握手/触发协议，让 STM32 决定视觉何时开始、用哪个轴，
+       并配合 main.py 里的 sensor.sleep() 发射前休眠省电降温。
 
-帧格式(定长 8 字节，大端)：
-    ------------------------------------------------------------------
-    | 0    | 1    | 2     | 3     | 4     | 5     | 6     | 7        |
-    | 0xAA | 0x55 | X_hi  | X_lo  | Y_hi  | Y_lo  | flags | CRC8     |
-    ------------------------------------------------------------------
-    X = (X_hi<<8) | X_lo     绿光中心 x 像素 (0~319 @QVGA)
-    Y = (Y_hi<<8) | Y_lo     绿光中心 y 像素 (0~239 @QVGA)
-    flags  bit0: 1=本帧检测到目标, 0=目标丢失(x,y 无意义)
-    CRC8   = crc8(byte0..byte6)  使用与 STM32 库一致的 SHT75 CRC8
-             (poly=0x31, init=0x00, 不反转), STM32 可用 crc_8() 直接校验
+帧格式(定长 7 字节，大端)：
+    [0]0xAA [1]0x55 [2]X_hi [3]X_lo [4]Y_hi [5]Y_lo [6]CRC8
+    CRC8: SHT75(poly=0x31, init=0)，与 STM32 crc8 库一致
+    丢失: X=Y=0
+    (制导只用目标中心 (x,y)；框尺寸 W/H 已移除, 简化串口传输)
 
-示例(OpenMV 端)：
-    from uart_ai import UartLink
-    link = UartLink(uart_id=3, baudrate=115200)
+握手协议(STM32 -> OpenMV, 单字节命令)：
+    0x11 = 选 yaw 轴      0x22 = 选 pitch 轴
+    0xAB = 唤醒(结束 sensor.sleep)
+    0x55 = 普通模式       0xFF = 比赛模式
+OpenMV -> STM32:
+    0xFF 'R''P''D''A''R''T'   就绪握手(启动完成)
+
+示例：
+    link = UartLink()
+    axis = link.wait_axis()      # 阻塞等 0x11/0x22
+    link.send_ready()            # 回就绪
+    link.wait_wake()             # 等 0xAB 唤醒
+    mode = link.wait_mode()      # 等 0x55/0xFF
     link.send(x, y, found)
-
-注意：
-    * OpenMV 不同型号 UART 引脚不同(如 H7 的 UART3 通常为 P4/P5)，请按板子接线，
-      并保证 TX->STM32 RX、RX->STM32 TX、共地。
-    * 波特率需与 STM32 端一致(默认 115200)。
 ================================================================================
 """
 
-frm pyb import UART
+import time
+
+from pyb import UART
 
 
 # ============================================================================
 #                              协议常量
 # ============================================================================
+FRAME_HEADER_1 = 0xAA
+FRAME_HEADER_2 = 0x55
+UART_FRAME_LEN = 7
 
-FRAME_HEADER_1 = 0xAA     # 帧头第 1 字节
-FRAME_HEADER_2 = 0x55     # 帧头第 2 字节
-UART_FRAME_LEN = 8        # 一帧总长度(STM32 recv_buff_size 必须等于它)
+CMD_AXIS_YAW = 0x11
+CMD_AXIS_PITCH = 0x22
+CMD_WAKE = 0xAB
+CMD_MODE_NORMAL = 0x55
+CMD_MODE_COMPETITION = 0xFF
 
-FLAG_TARGET_FOUND = 0x01  # flags: bit0 表示本帧是否检测到绿光
+READY_BANNER = bytes([0xFF, ord('R'), ord('P'), ord('D'), ord('A'), ord('R'), ord('T')])
 
 
-# ============================================================================
-#                              CRC8 (SHT75)
-# ============================================================================
 def crc8(data):
-    """计算 SHT75 标准 CRC8：多项式 0x31，初值 0x00，输入输出不反转。
-
-    与 STM32 侧 Modules/algorithm/crc8 的 crc_8() 结果完全一致，
-    因此 STM32 可直接用 crc_8(buf, 7) 校验本帧。
-    """
+    """SHT75 CRC8：多项式 0x31，初值 0x00，输入输出不反转。"""
     crc = 0x00
     for byte in data:
         crc ^= byte
@@ -65,44 +64,21 @@ def crc8(data):
     return crc
 
 
-# ============================================================================
-#                              串口链路类
-# ============================================================================
 class UartLink(object):
-    """封装“打包 + 发送”的串口链路对象。"""
+    """串口链路：打包发送 + 握手/触发。"""
 
     def __init__(self, uart_id=3, baudrate=115200):
-        """构造并打开串口。
-
-        参数:
-            uart_id : OpenMV 的 UART 编号(如 3)，引脚随型号而定
-            baudrate: 波特率，需与 STM32 一致
-        """
-        # 8 位数据位、无校验、1 位停止位；timeout_char 设为 0 表示非阻塞写
         self.uart = UART(uart_id, baudrate=baudrate, bits=8,
                          parity=None, stop=1, timeout_char=100)
 
-    # ------------------------------------------------------------------ #
-    # 打包
-    # ------------------------------------------------------------------ #
+    # --------------------------- 打包 / 发送 --------------------------- #
     @staticmethod
     def pack(x, y, found):
-        """把坐标打包成 8 字节定长帧(bytearray)。
+        """打包 7 字节帧(bytearray): AA 55 X_hi X_lo Y_hi Y_lo CRC8。"""
+        xi, yi = int(x) & 0xFFFF, int(y) & 0xFFFF
+        if not found:
+            xi = yi = 0
 
-        参数:
-            x, y : 像素坐标(0~65535，实际为图像分辨率范围)
-            found: bool/0/1，是否检测到目标
-        返回:
-            bytearray，长度 = UART_FRAME_LEN
-        """
-        # 1) 限制坐标到 16 位范围，防止负数/越界
-        xi = int(x) & 0xFFFF
-        yi = int(y) & 0xFFFF
-
-        # 2) 组装 flags
-        flags = FLAG_TARGET_FOUND if found else 0x00
-
-        # 3) 按“大端”填充前 7 字节
         frame = bytearray(UART_FRAME_LEN)
         frame[0] = FRAME_HEADER_1
         frame[1] = FRAME_HEADER_2
@@ -110,28 +86,66 @@ class UartLink(object):
         frame[3] = xi & 0xFF
         frame[4] = (yi >> 8) & 0xFF
         frame[5] = yi & 0xFF
-        frame[6] = flags
-
-        # 4) 第 8 字节为前 7 字节的 CRC8
-        frame[7] = crc8(frame[0:7])
+        frame[6] = crc8(frame[0:6])
         return frame
 
-    # ------------------------------------------------------------------ #
-    # 发送
-    # ------------------------------------------------------------------ #
     def send(self, x, y, found):
-        """打包并发送一帧，返回实际写入的字节数。"""
+        """打包并发送一帧。"""
         return self.uart.write(self.pack(x, y, found))
 
-    def send_frame(self, frame):
-        """直接发送已打包好的帧(便于复用/测试)。"""
-        return self.uart.write(frame)
+    def send_ready(self):
+        """发送就绪握手串。"""
+        return self.uart.write(READY_BANNER)
 
-    # ------------------------------------------------------------------ #
-    # 关闭
-    # ------------------------------------------------------------------ #
+    # --------------------------- 接收(握手) ---------------------------- #
+    def read_byte(self):
+        """非阻塞读 1 字节，无数据返回 None。"""
+        if self.uart.any():
+            b = self.uart.read(1)
+            if b:
+                return b[0]
+        return None
+
+    def wait_byte(self, codes, timeout_ms=None):
+        """等待 codes 中的某个字节。
+
+        timeout_ms:
+            None -> 一直等待(返回匹配字节);
+            数值 -> 超过该毫秒数未匹配则返回 None。
+        轮询间隔 1ms, 避免忙等占满 CPU。
+        """
+        t0 = time.ticks_ms()
+        while True:
+            b = self.read_byte()
+            if b is not None and b in codes:
+                return b
+            if timeout_ms is not None and time.ticks_diff(time.ticks_ms(), t0) >= timeout_ms:
+                return None
+            time.sleep_ms(1)
+
+    def wait_axis(self, timeout_ms=None):
+        """等待 STM32 指定制导轴，返回 'yaw' / 'pitch'，超时返回 None。"""
+        b = self.wait_byte((CMD_AXIS_YAW, CMD_AXIS_PITCH), timeout_ms)
+        if b == CMD_AXIS_YAW:
+            return 'yaw'
+        if b == CMD_AXIS_PITCH:
+            return 'pitch'
+        return None
+
+    def wait_wake(self, timeout_ms=None):
+        """等待 0xAB 唤醒命令，收到返回 True，超时返回 False。"""
+        return self.wait_byte((CMD_WAKE,), timeout_ms) is not None
+
+    def wait_mode(self, timeout_ms=None):
+        """等待模式选择，返回 'normal' / 'competition'，超时返回 None。"""
+        b = self.wait_byte((CMD_MODE_NORMAL, CMD_MODE_COMPETITION), timeout_ms)
+        if b == CMD_MODE_NORMAL:
+            return 'normal'
+        if b == CMD_MODE_COMPETITION:
+            return 'competition'
+        return None
+
     def deinit(self):
-        """关闭串口(释放资源)。"""
         try:
             self.uart.deinit()
         except Exception:
