@@ -44,7 +44,6 @@ void ServoMixInit(void) {
   const float scale[SERVO_MIX_N] = SERVO_MIX_SCALE;
   const float trim[SERVO_MIX_N] = SERVO_MIX_TRIM_DEG;
   const uint8_t rev[SERVO_MIX_N] = SERVO_MIX_REVERSE;
-  const float lim[SERVO_MIX_N] = SERVO_MIX_LIMIT_DEG;
   const float rate[SERVO_MIX_N] = SERVO_MIX_RATE_DPS;
   const uint8_t zen[SERVO_MIX_N] = SERVO_MIX_ZERO_ENABLE;
   uint8_t i;
@@ -69,7 +68,7 @@ void ServoMixInit(void) {
     /* 逻辑层(逐路装机标定, 取自本模块 cfg) */
     cfg.scale = scale[i];
     cfg.trim_deg = trim[i];
-    cfg.limit_deg = lim[i];
+    cfg.limit_deg = SERVO_MIX_MAX_DEG; /* 统一用满偏角作每路逻辑限位(不再逐路) */
     cfg.rate_limit_dps = rate[i];
     cfg.reverse = rev[i];
     cfg.zero_enable = zen[i];

@@ -61,3 +61,13 @@ void Fin_Task(void) {
 }
 
 const Dart_AppStatus_s *Fin_GetStatus(void) { return &s_st; }
+
+/* ---------------- 测试接口(薄封装 servo_mix_ai) ---------------- */
+
+void Fin_SetMode(uint8_t manual) {
+  ServoMixSetMode(manual ? SERVO_MIX_MODE_MANUAL : SERVO_MIX_MODE_MIX);
+}
+
+void Fin_SetManual(uint8_t ch, float deg) { ServoMixSetManual(ch, deg); }
+
+uint8_t Fin_Zero(uint8_t ch) { return ServoMixZero(ch); }

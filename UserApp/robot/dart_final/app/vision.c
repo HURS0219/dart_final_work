@@ -1,10 +1,10 @@
 /*
  * vision.c — 视觉 app 实现
  * =============================================================================
- * OpenMV 9 字节帧(定长, 大端):
- *   [0]0xAA [1]0x55 [2]X_hi [3]X_lo [4]Y_hi [5]Y_lo [6]W [7]H [8]CRC8
- *   CRC8: SHT75(poly=0x31, init=0), 对 [0..7] 求校验, 与 Modules/algorithm/crc8 一致。
- *   未识别到目标时 OpenMV 发全 0(X=Y=W=H=0)。
+ * OpenMV 7 字节帧(定长, 大端):
+ *   [0]0xAA [1]0x55 [2]X_hi [3]X_lo [4]Y_hi [5]Y_lo [6]CRC8
+ *   CRC8: SHT75(poly=0x31, init=0), 对 [0..5] 求校验, 与 Modules/algorithm/crc8 一致。
+ *   未识别到目标时 OpenMV 发全 0(X=Y=0)。
  * 分工: 中断里只做“收整帧 + 校验 + 解码到缓存并置标志”; 发布到话题在任务里做。
  * =============================================================================
  */
@@ -38,14 +38,12 @@ static void Vision_RxCallback(void) {
   uint8_t *b = s_usart->recv_buff;
 
   if (b[0] != OPENMV_HEAD1 || b[1] != OPENMV_HEAD2) return;
-  if (crc_8(b, 8) != b[8]) return; /* CRC8 校验失败丢弃 */
+  if (crc_8(b, 6) != b[6]) return; /* CRC8 校验失败丢弃 */
 
   s_rx.x = (int16_t)((b[2] << 8) | b[3]);
   s_rx.y = (int16_t)((b[4] << 8) | b[5]);
-  s_rx.w = b[6];
-  s_rx.h = b[7];
   /* OpenMV 丢失目标时全 0 */
-  s_rx.found = !(s_rx.x == 0 && s_rx.y == 0 && s_rx.w == 0 && s_rx.h == 0);
+  s_rx.found = !(s_rx.x == 0 && s_rx.y == 0);
   s_new_frame = 1;
 }
 
