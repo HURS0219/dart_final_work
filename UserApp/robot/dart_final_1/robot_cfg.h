@@ -10,5 +10,8 @@
 /* 1=初始化真实 BMI088(C 板板载, hspi1); 0=跳过(用 ATT 注入姿态) */
 #define DF1_IMU_ENABLE 1
 
-/* 1=注册真实 OpenMV 串口(USART3); 0=不注册(用 TGT 注入目标) */
-#define DF1_VISION_ENABLE 0
+/* 1=启用 vision app; 0=不启用(用 TGT 注入目标) */
+#define DF1_VISION_ENABLE 1
+
+/* 1=视觉走 SPI2(从机; OpenMV 做主机); 0=走 USART3(原 UART 方案) */
+#define DF1_VISION_SPI 1
