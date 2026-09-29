@@ -371,6 +371,10 @@ void RobotInit(void) {
   Guidance_Init();
   Fin_Init();
 
+  /* 使能与实际初始化一致: 未 init 的 app 不跑其 Task (否则可能空指针) */
+  s_app_en[A_IMU] = TEST_IMU_ENABLE ? 1u : 0u;
+  s_app_en[A_VISION] = TEST_VISION_ENABLE ? 1u : 0u;
+
   /* 注入发布者(attitude/target/mix) */
   s_pub[T_ATTITUDE] = PubRegister(TOPIC_ATTITUDE, sizeof(Dart_Attitude_s));
   s_pub[T_TARGET] = PubRegister(TOPIC_TARGET, sizeof(Dart_Target_s));

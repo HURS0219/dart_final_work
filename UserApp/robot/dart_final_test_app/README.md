@@ -87,7 +87,7 @@ powershell -File Tools\scripts\reset.ps1
 ## 7. 配置（`test_cfg.h`）
 | 宏 | 默认 | 说明 |
 |---|---|---|
-| `TEST_IMU_ENABLE` | 1 | 1=初始化真实 BMI088（C 板板载, 走 hspi1）提供真实姿态；0=跳过（无 IMU 板用 `ATT` 注入，避免 `INS_Init` 死等） |
+| `TEST_IMU_ENABLE` | 0 | 0=用 `ATT` 注入姿态；1=真实 BMI088（**本板实测会卡在 `SPI_WaitFlagStateUntilTimeout`，暂用 0**） |
 | `TEST_VISION_ENABLE` | 0 | 0=不注册 OpenMV 串口，用 `TGT` 注入 |
 | `LOG_PERIOD_MS` | 0 | 自动日志周期（**0=静默，仅 `STAT`**；>0 每秒一条，存档用） |
 | `DATA_FRESH_MS` | 500 | 数据“新鲜”判定窗口 |

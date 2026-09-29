@@ -32,7 +32,7 @@
 
 ## 调试工作流（脚本在 `Tools/scripts/`）
 - **一键烧录**：VS Code `Ctrl+Shift+B`（弹框选 robot → `oneclick_flash.ps1` 编译+烧录；**不再默认烧 dart_final**）；或 `Tools/scripts/oneclick_flash.ps1 -Robot <r> [-NoBuild|-NoFlash|-Clean]`。
-- **可视化上位机**：`Tools/gui`（PyQt5 + pyserial，走板载 **USB-CDC** 串口；输入=滑条 target-x/4×fin/mix-PYR，输出=文本+`STAT` 按钮）；打包 `Tools/gui/build_exe.ps1` → `dist\dart_test_gui.exe`。
+- **可视化上位机**：`Tools/gui`（PyQt5；传输默认 **J-Link RTT/SWD**(pylink-square，仅需 SWD)，或 USB-CDC 串口(pyserial)；输入=滑条 target-x/4×fin/mix-PYR，输出=文本+`STAT` 按钮）；打包 `Tools/gui/build_exe.ps1` → `dist\dart_test_gui.exe`。
 - 烧录 `flash.ps1 -Hex <hex>`；复位 `reset.ps1`。
 - RTT 注入命令：`rtt_send.ps1 -Cmd "<...>" -Elf <elf>`（nm 动态解析 `_acDownBuffer`/`_SEGGER_RTT`，免硬编码）；或 RTT Viewer。
 - 读 RAM/Flash：`mem_read.py --elf --sym/--addr`（nm + JLink）。

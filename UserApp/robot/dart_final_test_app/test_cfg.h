@@ -8,7 +8,7 @@
 #pragma once
 
 /* ---------- 测试使能 ---------- */
-#define TEST_IMU_ENABLE 1    /* 1=初始化真实 BMI088(C 板板载, 走 hspi1), 提供真实姿态; 0=用 ATT 注入 */
+#define TEST_IMU_ENABLE 0    /* 0=用 ATT 注入(本板 IMU 初始化会卡在 SPI 等待, 见 README); 1=用真实 BMI088 */
 #define TEST_VISION_ENABLE 0 /* 0=不注册 OpenMV 串口, 用 TGT 注入目标 */
 
 /* ---------- 输出周期 ---------- */
