@@ -12,10 +12,9 @@
 #define TEST_VISION_ENABLE 0 /* 0=不注册 OpenMV 串口, 用 TGT 注入 */
 
 /* ---------- 输出周期 ---------- */
-/* 每秒把状态表写出一条(经 RTT 上行通道0; 用 Tools\scripts\rtt_log.ps1 存档到 Debug\)。
- * 无实时 UI 刷屏; 其触发条件另见 test.c 的 RobotTask()。
- * 设 0 = 完全不自动输出, 只在你发 STAT 命令时打印一次。 */
-#define LOG_PERIOD_MS 1000u
+/* 0 = 静默: 不自动输出, 只在你发 STAT 命令时打印一次状态表(推荐)。
+ * >0 = 每隔该毫秒数自动打一条(经 RTT 上行通道0; 可用 Tools\scripts\rtt_log.ps1 存档到 Debug\)。 */
+#define LOG_PERIOD_MS 0u
 #define DATA_FRESH_MS 500u  /* 话题数据“新鲜”判定窗口(ms): 超过则 data=0 */
 
 /* ============================================================================

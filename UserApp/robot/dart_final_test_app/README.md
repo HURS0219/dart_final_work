@@ -11,7 +11,7 @@
 
 ## 1. 为什么用它
 - 硬件通信（OpenMV 串口 / ESP32 / 甚至 IMU）还没就绪时，也能验证每个 app 是否**独立正常运行**；
-- 提供 **ros2 风格**的实时监视（每个 pub/sub 的状态 + 值 + 时间戳），并**每秒写一条 log**（供 MATLAB 画图）。
+- 提供 **ros2 风格**的状态表（每个 pub/sub 的状态 + 值 + 时间戳），发 `STAT` 打印一次；也可开周期 log（供 MATLAB）。
 
 ## 2. 编译 / 烧录
 ```powershell
@@ -45,7 +45,7 @@ powershell -File Tools\scripts\reset.ps1
 > 注入类命令（`ATT`/`TGT`/`TGTN`/`FMIX`/`FIN`/`RESET`）**无回执** → 发完后用 `STAT` 查看结果；`PING` 例外，会回 `PONG`。
 
 ## 4. 状态表（ros2 风格）
-**无实时刷屏**：只在 **每秒一次**（`LOG_PERIOD_MS`）或你发 **`STAT`** 时打印一次。格式：
+**静默运行**：默认**不自动输出**，只在你发 **`STAT`** 时打印一次。格式：
 ```
 [t=0012s] <话题>  prod=<生产者app>:1/0  sub=<消费者app>:1/0  data=1/0 | 值...
 ```
@@ -67,10 +67,10 @@ powershell -File Tools\scripts\reset.ps1
 | `p` | 4 路脉宽 | 原值 us（500~2500） |
 | `fs` | mix 失效标志 | 1 时下附 `fsreason=NO_ENABLE/NO_VISION/NO_ATTITUDE` |
 
-## 5. 日志（存档到 `Debug\`）
-- **每秒一条**（同上格式），经 RTT 输出；存档：
+## 5. 日志 / 存档（可选）
+- **默认静默**（`LOG_PERIOD_MS=0`）：RTT 不自动输出，只在你发 `STAT` 时打印一次；
+- 若想**周期存档**到 `Debug\`：把 `test_cfg.h` 的 `LOG_PERIOD_MS` 设为 `1000`（每秒一条），再跑
   `powershell -File Tools\scripts\rtt_log.ps1 -Out Debug\dart_test_log.txt`（Ctrl+C 结束）；
-- 想**完全静默**（只在你发 `STAT` 时才打印一次）→ 把 `test_cfg.h` 的 `LOG_PERIOD_MS` 设为 `0`；
 - MATLAB 里按上面表格 ÷10 / ÷100 还原物理量。
 
 ## 6. 标准测试流程（自底向上）
@@ -89,7 +89,7 @@ powershell -File Tools\scripts\reset.ps1
 |---|---|---|
 | `TEST_IMU_ENABLE` | 0 | 0=不初始化真实 IMU（**避免无 BMI088 时 `INS_Init` 死等**），用 `ATT` 注入 |
 | `TEST_VISION_ENABLE` | 0 | 0=不注册 OpenMV 串口，用 `TGT` 注入 |
-| `LOG_PERIOD_MS` | 1000 | 每秒日志周期（**0=不自动输出，仅 `STAT`**） |
+| `LOG_PERIOD_MS` | 0 | 自动日志周期（**0=静默，仅 `STAT`**；>0 每秒一条，存档用） |
 | `DATA_FRESH_MS` | 500 | 数据“新鲜”判定窗口 |
 | `TOPIC_PRODUCER/CONSUMER/NAME` | — | 话题↔生产者/消费者映射 |
 

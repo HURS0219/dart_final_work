@@ -367,9 +367,8 @@ void RobotTask(void) {
   MonitorUpdate();
   ConsolePoll();
 
-  /* 3) 每秒日志(写出一条状态表, 经 RTT 存档到 Debug\)。
-   *    无实时 UI 刷屏; 想要“完全静默, 只在 STAT 时打印一次” -> 把 test_cfg.h 里
-   *    LOG_PERIOD_MS 设为 0。 */
+  /* 3) 可选周期日志: LOG_PERIOD_MS=0(默认) -> 完全静默, 只在 STAT 时打印一次;
+   *    >0 -> 每隔该毫秒数自动打一条(经 RTT 存档到 Debug\)。 */
   if (LOG_PERIOD_MS > 0u && (now - last_log) >= LOG_PERIOD_MS) {
     last_log = now;
     PrintTable(1, now / 1000u);
