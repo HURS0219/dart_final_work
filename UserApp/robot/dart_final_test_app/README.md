@@ -40,10 +40,12 @@ powershell -File Tools\scripts\reset.ps1
 | `FIN,<ch>,<deg>` | fin 切 MANUAL，给第 ch 路(0..3)逻辑角 |
 | `RESET` | 软复位测试系统（全使能 + 清零监视） |
 | `RESET,<APP>` | 单独关掉某 app；APP ∈ `IMU / VISION / GUIDANCE / FIN` |
-| `STAT` | 立即打印一次状态表 |
+| `STAT` | 立即打印一次状态表（**唯一的按需输出**） |
 
-## 4. 监视 UI（ros2 风格）
-每 100ms 刷新一次（实时），格式：
+> 注入类命令（`ATT`/`TGT`/`TGTN`/`FMIX`/`FIN`/`RESET`）**无回执** → 发完后用 `STAT` 查看结果；`PING` 例外，会回 `PONG`。
+
+## 4. 状态表（ros2 风格）
+**无实时刷屏**：只在 **每秒一次**（`LOG_PERIOD_MS`）或你发 **`STAT`** 时打印一次。格式：
 ```
 [t=0012s] <话题>  prod=<生产者app>:1/0  sub=<消费者app>:1/0  data=1/0 | 值...
 ```
@@ -65,9 +67,10 @@ powershell -File Tools\scripts\reset.ps1
 | `p` | 4 路脉宽 | 原值 us（500~2500） |
 | `fs` | mix 失效标志 | 1 时下附 `fsreason=NO_ENABLE/NO_VISION/NO_ATTITUDE` |
 
-## 5. 日志（供 MATLAB）
-- 每秒一条（同 UI 格式），经 RTT 输出；
-- 保存到文件：`powershell -File Tools\scripts\rtt_log.ps1 -Out Debug\dart_test_log.txt`（Ctrl+C 结束）；
+## 5. 日志（存档到 `Debug\`）
+- **每秒一条**（同上格式），经 RTT 输出；存档：
+  `powershell -File Tools\scripts\rtt_log.ps1 -Out Debug\dart_test_log.txt`（Ctrl+C 结束）；
+- 想**完全静默**（只在你发 `STAT` 时才打印一次）→ 把 `test_cfg.h` 的 `LOG_PERIOD_MS` 设为 `0`；
 - MATLAB 里按上面表格 ÷10 / ÷100 还原物理量。
 
 ## 6. 标准测试流程（自底向上）
@@ -86,8 +89,7 @@ powershell -File Tools\scripts\reset.ps1
 |---|---|---|
 | `TEST_IMU_ENABLE` | 0 | 0=不初始化真实 IMU（**避免无 BMI088 时 `INS_Init` 死等**），用 `ATT` 注入 |
 | `TEST_VISION_ENABLE` | 0 | 0=不注册 OpenMV 串口，用 `TGT` 注入 |
-| `MON_PERIOD_MS` | 100 | 实时 UI 刷新周期 |
-| `LOG_PERIOD_MS` | 1000 | 每秒日志周期 |
+| `LOG_PERIOD_MS` | 1000 | 每秒日志周期（**0=不自动输出，仅 `STAT`**） |
 | `DATA_FRESH_MS` | 500 | 数据“新鲜”判定窗口 |
 | `TOPIC_PRODUCER/CONSUMER/NAME` | — | 话题↔生产者/消费者映射 |
 

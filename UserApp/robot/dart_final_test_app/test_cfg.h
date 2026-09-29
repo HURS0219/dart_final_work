@@ -11,9 +11,11 @@
 #define TEST_IMU_ENABLE 0    /* 0=不初始化真实 IMU(避免无 BMI088 时 INS_Init 死等), 用 ATT 注入 */
 #define TEST_VISION_ENABLE 0 /* 0=不注册 OpenMV 串口, 用 TGT 注入 */
 
-/* ---------- 周期 ---------- */
-#define MON_PERIOD_MS 100u  /* 实时监视 UI 刷新周期(10Hz) */
-#define LOG_PERIOD_MS 1000u /* 每秒写一条 log(供 MATLAB) */
+/* ---------- 输出周期 ---------- */
+/* 每秒把状态表写出一条(经 RTT 上行通道0; 用 Tools\scripts\rtt_log.ps1 存档到 Debug\)。
+ * 无实时 UI 刷屏; 其触发条件另见 test.c 的 RobotTask()。
+ * 设 0 = 完全不自动输出, 只在你发 STAT 命令时打印一次。 */
+#define LOG_PERIOD_MS 1000u
 #define DATA_FRESH_MS 500u  /* 话题数据“新鲜”判定窗口(ms): 超过则 data=0 */
 
 /* ============================================================================

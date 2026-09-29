@@ -233,16 +233,12 @@ static void HandleLine(char *line) {
       s_has_att = s_has_tgt = s_has_mix = s_has_fb = 0;
       memset(&s_hb_last, 0, sizeof(s_hb_last));
       memset(&s_hb_stale, 0, sizeof(s_hb_stale));
-      Reply("RESET: all apps enabled\n");
     } else {
       int i, hit = 0;
       for (i = 0; i < A_CNT; i++) {
         if (strcmp(arg, kAppName[i]) == 0) {
           s_app_en[i] = 0;
           hit = 1;
-          Reply("RESET: ");
-          Reply(kAppName[i]);
-          Reply(" disabled\n");
         }
       }
       if (!hit) Reply("RESET: unknown app name\n");
@@ -259,7 +255,6 @@ static void HandleLine(char *line) {
     s_m_att.valid = 1;
     s_m_att.tick = NowMs();
     PubPushMessage(s_pub[T_ATTITUDE], &s_m_att);
-    Reply("ATT pushed\n");
     return;
   }
   if (strncmp(line, "TGT,", 4) == 0) {
@@ -271,14 +266,12 @@ static void HandleLine(char *line) {
     s_m_tgt.found = 1;
     s_m_tgt.tick = NowMs();
     PubPushMessage(s_pub[T_TARGET], &s_m_tgt);
-    Reply("TGT pushed\n");
     return;
   }
   if (strcmp(line, "TGTN") == 0) {
     s_m_tgt.found = 0;
     s_m_tgt.tick = NowMs();
     PubPushMessage(s_pub[T_TARGET], &s_m_tgt);
-    Reply("TGT lost\n");
     return;
   }
   if (strncmp(line, "FMIX,", 5) == 0) {
@@ -291,7 +284,6 @@ static void HandleLine(char *line) {
     s_m_mix.failsafe = 0;
     s_m_mix.tick = NowMs();
     PubPushMessage(s_pub[T_MIX], &s_m_mix);
-    Reply("FMIX pushed\n");
     return;
   }
   if (strncmp(line, "FIN,", 4) == 0) {
@@ -299,7 +291,6 @@ static void HandleLine(char *line) {
     ParseArgs(line + 4, v, 2);
     Fin_SetMode(1); /* MANUAL */
     Fin_SetManual((uint8_t)v[0], v[1]);
-    Reply("FIN manual set\n");
     return;
   }
   Reply("ERR unknown cmd\n");
@@ -360,7 +351,7 @@ void RobotInit(void) {
 }
 
 void RobotTask(void) {
-  static uint32_t last_mon = 0, last_log = 0;
+  static uint32_t last_log = 0;
   uint32_t now;
 
   robot->dt = DWT_GetDeltaT(&robot->DWT_CNT);
@@ -372,16 +363,14 @@ void RobotTask(void) {
   if (s_app_en[A_GUID]) Guidance_Task(robot->dt, 1u);
   if (s_app_en[A_FIN]) Fin_Task();
 
-  /* 2) 监视 + 控制台 */
+  /* 2) 监视 + 控制台(只收命令, 不刷屏) */
   MonitorUpdate();
   ConsolePoll();
 
-  /* 3) 实时 UI(10Hz) + 每秒日志 */
-  if (now - last_mon >= MON_PERIOD_MS) {
-    last_mon = now;
-    PrintTable(0, now / 1000u);
-  }
-  if (now - last_log >= LOG_PERIOD_MS) {
+  /* 3) 每秒日志(写出一条状态表, 经 RTT 存档到 Debug\)。
+   *    无实时 UI 刷屏; 想要“完全静默, 只在 STAT 时打印一次” -> 把 test_cfg.h 里
+   *    LOG_PERIOD_MS 设为 0。 */
+  if (LOG_PERIOD_MS > 0u && (now - last_log) >= LOG_PERIOD_MS) {
     last_log = now;
     PrintTable(1, now / 1000u);
   }

@@ -25,7 +25,7 @@
 ## 飞镖 userapp 调试（`UserApp/robot/dart_final_test_app`）
 - **用途**：逐个黑盒测 `dart_final` 各 app（自底向上 fin→guidance→vision/imu），无需 IMU/视觉硬件；`test.c` 代替 `robot.c`，复用 `dart_final/app/*`（robot.cmake include+glob，不含 `dart_final/robot.c`）。
 - **命令（RTT）**：`PING` / `ATT,<r>,<p>,<y>`(注入姿态) / `TGT,<x>,<y>` / `TGTN`(丢目标) / `FMIX,<p>,<y>,<r>`(注入混控) / `FIN,<ch>,<deg>`(逐路手动) / `RESET[,<APP>]`(软复位/单关某app) / `STAT`。
-- **监视 UI**（方案①，ros2 风格）：每话题 `prod=<生产者app>:1/0 sub=<消费者app>:1/0 data=1/0 | 值`；10Hz 刷新 + 每秒一条 log；`fs=1` 附 `fsreason`。浮点用整数定标（`roll10/p100/d10`，÷10/÷100）。
+- **状态表**（方案①，ros2 风格）：每话题 `prod=<生产者app>:1/0 sub=<消费者app>:1/0 data=1/0 | 值`；**无实时刷屏**，只在每秒一条(`LOG_PERIOD_MS`)或手动 `STAT` 时打印一次；`fs=1` 附 `fsreason`。浮点用整数定标（`roll10/p100/d10`，÷10/÷100）。注入类命令无回执。
 - **cfg**（`test_cfg.h`）：`TEST_IMU_ENABLE=0`/`TEST_VISION_ENABLE=0`（默认注入，避免死等/串口）、`MON_PERIOD_MS=100`、`LOG_PERIOD_MS=1000`、话题↔生产者/消费者映射。
 - 详见 `dart_final_test_app/README.md`。
 - **协议**：OpenMV 帧 **7 字节** `AA 55 X_hi X_lo Y_hi Y_lo CRC8`（SHT75 poly0x31，CRC 覆盖 0..5），去掉了 W/H；STM32 侧 `vision.c` 解析。
