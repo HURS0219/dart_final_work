@@ -150,8 +150,9 @@ powershell -ExecutionPolicy Bypass -File make_one\build.ps1 -Robot <robot> -Boar
 
 **关键约定**：
 - 切换分支会按目标分支切换**已跟踪**文件（只在该分支存在的文件会从工作区消失，切回即恢复）；**未跟踪文件/空目录不受影响**。
-- 三条姿态控制分支为**独立实验版**，不并入 `main`；后期若要合并，用 `ROLL_CTRL_MODE` 切换控制器（会显著增加复杂度，谨慎）。
-- 版本 tag：`1.0.0 ~ 1.0.5`（`1.0.4`=Tools 档案，`1.0.5`=根 README 总览）。
+- 三条姿态控制分支为**独立实验版**，不并入 `main`；**维护方式**：定期 `git merge main` 让实验分支**跟紧主线基础**（反向合并不做）。后期若要合并，用 `ROLL_CTRL_MODE` 切换控制器（会显著增加复杂度，谨慎）。
+- 版本 tag：`1.0.0 ~ 1.0.6`（`1.0.4`=Tools 档案，`1.0.5`=根 README，`1.0.6`=dart_final_test_app + 7 字节帧 + servo_mix_ai 简化）。
+- 调试工具：`UserApp/robot/dart_final_test_app/`（分-app 黑盒测试，见其 README）+ `Tools/scripts/`。
 
 ---
 
