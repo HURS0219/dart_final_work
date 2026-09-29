@@ -39,10 +39,15 @@
 #define SERVO_MIX_N 4
 
 /*
- * 4 路舵机共用的定时器句柄(C 板为 TIM1)。
- * 依据 CubeMX: PWM1~4 = TIM1_CH1~CH4 = PE9 / PE11 / PE13 / PE14, 50Hz。
+ * 4 路舵机共用的定时器句柄。
+ * 默认: C 板(F407)=TIM1 (PWM1~4 = TIM1_CH1~CH4 = PE9/PE11/PE13/PE14);
+ *       H7/H743 = TIM3 (默认占位, 现场按板子改, 预留接口)。
  */
+#if defined(STM32H723xx) || defined(STM32H743xx)
+#define SERVO_MIX_TIM (&htim3) /* H743/H7: 默认, 留接口以后改 */
+#else
 #define SERVO_MIX_TIM (&htim1)
+#endif
 
 /*
  * 4 路舵机各自的定时器通道, 顺序即“舵面编号 0/1/2/3”。

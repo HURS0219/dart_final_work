@@ -25,3 +25,6 @@ int Vision_TxTest(void);
 
 /* 诊断(DF1_UART_SCAN): 读 USART1/3/6 各自收到字节数 */
 void Vision_GetScan(uint32_t *c1, uint32_t *c3, uint32_t *c6);
+
+/* 诊断(DF1_SPI_SCKDIAG): 读 PB13(SCK) 时钟脉冲计数 */
+uint32_t Vision_SckEdges(void);

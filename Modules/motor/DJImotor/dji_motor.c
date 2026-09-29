@@ -61,7 +61,7 @@ static CANInstance sender_assignment[6] = {
            .txconf.DLC = 0x08,
            .tx_buff = {0}},
 };
-#elifdef STM32H723xx
+#elif defined(STM32H723xx) || defined(STM32H743xx)
 #define FDCAN_INSTANCE_INIT(fdcan_handle, tx_id)                               \
   {.can_handle = (fdcan_handle),                                               \
    .txconf = (FDCAN_TxHeaderTypeDef){.Identifier = (tx_id),                    \
@@ -173,7 +173,7 @@ static void MotorSenderGrouping(DJIMotorInstance* motor, CAN_Init_Config_s* conf
             "[dji_motor]You must not register other motors using the API of DJI motor.");  // 其他电机不应该在这里注册
   }
 }
-#elifdef STM32H723xx
+#elif defined(STM32H723xx) || defined(STM32H743xx)
 static void MotorSenderGrouping(DJIMotorInstance* motor, CAN_Init_Config_s* config) {
   // 修改：参数类型
   uint8_t motor_id = config->tx_id - 1;  // 下标从零开始,先减一方便赋值
@@ -295,7 +295,7 @@ static void DecodeDJIMotor(CANInstance* _instance) {
  *
  * @param motor_ptr 电机实例指针
  */
-#ifdef STM32H7
+#if defined(STM32H7) || defined(STM32H723xx) || defined(STM32H743xx)
 static void DJIMotorLostCallback(void* motor_ptr) {
   DJIMotorInstance* motor = (DJIMotorInstance*)motor_ptr;
   uint16_t can_bus = motor->motor_can_instance->can_handle == &hfdcan1

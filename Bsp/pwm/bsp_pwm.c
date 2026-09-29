@@ -86,7 +86,7 @@ static uint32_t PWMSelectTclk(TIM_HandleTypeDef *htim) {
   }
   return 0;
 }
-#elifdef STM32H723xx
+#elif defined(STM32H723xx) || defined(STM32H743xx)
 // 设置pwm对应定时器时钟源频率
 static uint32_t PWMSelectTclk(TIM_HandleTypeDef *htim) {
   uintptr_t tclk_temp = ((uintptr_t)((htim)->Instance));

@@ -9,7 +9,7 @@
 #include "main.h"
 #include "string.h"
 
-#ifdef STM32H723xx
+#if defined(STM32H723xx) || defined(STM32H743xx)
 #define FLASH_TYPEPROGRAM_WORD FLASH_TYPEPROGRAM_FLASHWORD
 #endif
 
@@ -20,7 +20,7 @@ static void FlashClearErrors(void) {
 #if defined(STM32F407xx)
   __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_EOP | FLASH_FLAG_OPERR | FLASH_FLAG_WRPERR |
                          FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR | FLASH_FLAG_PGSERR);
-#elif defined(STM32H723xx)
+#elif defined(STM32H723xx) || defined(STM32H743xx)
   __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS_BANK1 | FLASH_FLAG_ALL_ERRORS_BANK2);
 #endif
 }
@@ -41,7 +41,7 @@ void flash_erase_address(uint32_t address, uint16_t len) {
   flash_erase.NbSectors = len;
   flash_erase.Sector = ger_sector(address);
   flash_erase.Banks = 0u;
-#ifdef STM32H723xx
+#if defined(STM32H723xx) || defined(STM32H743xx)
   flash_erase.Banks = (address >= ADDR_FLASH_SECTOR_12) ? FLASH_BANK_2 : FLASH_BANK_1;
 #endif
 
@@ -143,7 +143,7 @@ void flash_read(uint32_t address, uint32_t *buf, uint32_t len) { memcpy(buf, (vo
  */
 static uint32_t ger_sector(uint32_t address) {
   uint32_t sector = 0;
-#ifdef STM32H723xx
+#if defined(STM32H723xx) || defined(STM32H743xx)
   /* H7: 每扇区 128KB; bank1 从 0x08000000, bank2 从 0x08100000; 返回 bank 内扇区号 */
   {
     uint32_t base = (address >= ADDR_FLASH_SECTOR_12) ? ADDR_FLASH_SECTOR_12 : ADDR_FLASH_SECTOR_0;

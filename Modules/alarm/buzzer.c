@@ -105,7 +105,7 @@ void BuzzerInit() {
       .dutyratio = 0,
       .period = 0.001,
   };
-#elifdef STM32H723xx
+#elif defined(STM32H723xx) || defined(STM32H743xx)
   PWM_Init_Config_s buzzer_config = {
       .htim = &htim12,
       .channel = TIM_CHANNEL_2,

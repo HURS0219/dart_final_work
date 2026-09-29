@@ -37,9 +37,34 @@ static uint32_t s_rx_ok = 0, s_rx_bad = 0; /* 收帧统计 */
 
 static uint8_t s_buf[OPENMV_RECV_SIZE]; /* SPI 从机接收缓冲(中断填) */
 
+#if DF1_SPI_SCKDIAG
+/* ===== 诊断: 把 PB13(SCK) 配成 EXTI 上升沿, 统计时钟脉冲数 ===== */
+static volatile uint32_t s_sck_edges = 0;
+void EXTI15_10_IRQHandler(void) {
+  if (EXTI->PR & GPIO_PIN_13) {
+    EXTI->PR = GPIO_PIN_13;
+    s_sck_edges++;
+  }
+}
+static void SckDiagInit(void) {
+  GPIO_InitTypeDef g = {0};
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+  g.Pin = GPIO_PIN_13;
+  g.Mode = GPIO_MODE_IT_RISING;
+  g.Pull = GPIO_PULLDOWN;
+  HAL_GPIO_Init(GPIOB, &g);
+  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+}
+#endif
+
 static void VisionSpiInit(void) {
+#if DF1_SPI_SCKDIAG
+  SckDiagInit();
+  return;
+#else
   /* 复用 SPI2, 重配为从机 (CPOL=0, CPHA=0, 与 OpenMV 默认一致)
-   * NSS 软件管理 + SSI=1: 从机“常被选中”, 只要 SCK 有脉冲就接收 —— 不强依赖 CS 接线。 */
+   * NSS 软件管理 + SSI=0: 从机“常被选中”, 只要 SCK 有脉冲就接收 —— 不强依赖 CS 接线。 */
   hspi2.Init.Mode = SPI_MODE_SLAVE;
   hspi2.Init.Direction = SPI_DIRECTION_2LINES;
   hspi2.Init.DataSize = SPI_DATASIZE_8BIT;
@@ -56,7 +81,9 @@ static void VisionSpiInit(void) {
   hspi2.Instance->CR1 &= ~SPI_CR1_SSI; /* 软件 NSS: 从机需 NSS=低(SSI=0)才被选中 */
   /* 非阻塞: 中断方式收 7 字节; SPI2_IRQHandler 已在 it.c 接入 */
   (void)HAL_SPI_Receive_IT(&hspi2, s_buf, OPENMV_RECV_SIZE);
+#endif
 }
+
 #else
 #include "usart.h"
 
@@ -166,6 +193,7 @@ void Vision_Task(void) {
   Dart_Target_s t;
 
 #if DF1_VISION_SPI
+#if !DF1_SPI_SCKDIAG
   {
     HAL_SPI_StateTypeDef st = HAL_SPI_GetState(&hspi2);
     if (st == HAL_SPI_STATE_READY) { /* 一帧收完(中断方式) */
@@ -184,6 +212,7 @@ void Vision_Task(void) {
       (void)HAL_SPI_Receive_IT(&hspi2, s_buf, OPENMV_RECV_SIZE);
     }
   }
+#endif
 #else
   if (s_new_frame) {
     s_new_frame = 0;

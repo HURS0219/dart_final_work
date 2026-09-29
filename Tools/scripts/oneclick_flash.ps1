@@ -13,7 +13,7 @@
 # =====================================================================
 param(
     [string]$Robot = "dart_final",
-    [ValidateSet("GIMBAL_BOARD", "CHASSIS_BOARD", "ONE_BOARD")][string]$Board = "GIMBAL_BOARD",
+    [ValidateSet("GIMBAL_BOARD", "CHASSIS_BOARD", "ONE_BOARD", "H743_BOARD")][string]$Board = "GIMBAL_BOARD",
     [switch]$NoBuild,
     [switch]$NoFlash,
     [switch]$Clean,
@@ -34,6 +34,7 @@ $Hex         = Join-Path $Root ("make_one\build_" + $Robot + "\control-2026.hex"
 if ([string]::IsNullOrEmpty($Device)) {
     switch ($Board) {
         "CHASSIS_BOARD" { $Device = "STM32H723ZG" }
+        "H743_BOARD"    { $Device = "STM32H743ZI" }
         default         { $Device = "STM32F407IG" }
     }
 }

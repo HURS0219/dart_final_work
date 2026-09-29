@@ -16,6 +16,14 @@
 #ifndef DART_FINAL_CFG_H
 #define DART_FINAL_CFG_H
 
+/* IMU 使能: H743 板(本次调试板)无 BMI088 → 关闭(否则 INS_Init 里 BMI088Init 死等);
+ * 其余板(F407/GIMBAL 等)默认开启。 */
+#if defined(STM32H743xx)
+#define DART_IMU_ENABLE 0
+#else
+#define DART_IMU_ENABLE 1
+#endif
+
 /* ===================== 制导 (guidance app) ===================== */
 
 /*
@@ -92,8 +100,8 @@
  *   OpenMV: 另一路 USART + 并行 SPI(防丢帧)
  *   VOFA  : 预留(本次只用 RTT)
  */
-#define DART_USART_ESP32 (&huart6)
-#define DART_USART_OPENMV (&huart3)
+#define DART_USART_ESP32 (&huart5) /* H743: 预留串口(原 huart6 不存在) */
+#define DART_USART_OPENMV (&huart7)
 #define DART_SPI_OPENMV (&hspi2)  /* BMI088 占 hspi1, 故 OpenMV 用 hspi2 */
 #define DART_USART_VOFA (&huart1) /* 预留 */
 

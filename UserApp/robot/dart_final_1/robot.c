@@ -206,8 +206,8 @@ static void PrintState(void) {
   {
     uint32_t c1, c3, c6;
     Vision_GetScan(&c1, &c3, &c6);
-    snprintf(buf, sizeof(buf), "[dart1] uartscan c1=%u c3=%u c6=%u\r\n",
-             (unsigned)c1, (unsigned)c3, (unsigned)c6);
+    snprintf(buf, sizeof(buf), "[dart1] uartscan c1=%u c3=%u c6=%u sck=%u\r\n",
+             (unsigned)c1, (unsigned)c3, (unsigned)c6, (unsigned)Vision_SckEdges());
     Reply(buf);
   }
 }

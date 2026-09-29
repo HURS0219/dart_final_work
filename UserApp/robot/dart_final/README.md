@@ -155,10 +155,14 @@ fin:       servo_mix_ai:  target[i] = clamp(Σ matrix[i][j]*mix[j] * MAX_DEG, ±
 ## 9. 构建 / 烧录
 
 ```powershell
+# F407 C 板(GIMBAL_BOARD)
 powershell -ExecutionPolicy Bypass -File make_one\build.ps1 -Robot dart_final -Board GIMBAL_BOARD
+# H743 板(H743_BOARD) —— 见 §19
+powershell -ExecutionPolicy Bypass -File make_one\build.ps1 -Robot dart_final -Board H743_BOARD
 # 产物: make_one\build_dart_final\control-2026.hex
 ```
 默认板 `GIMBAL_BOARD`（STM32F407，4 舵机 = TIM1 CH1–4 = PE9/PE11/PE13/PE14）。
+H743 板用 `-Board H743_BOARD`（`stm32-h743`，JLink 器件 `STM32H743ZI`）。
 
 ---
 
@@ -273,3 +277,26 @@ ESP32 本次**不用于运行时控制**，而是作**无线烧录**（替代 SW
 
 - `Modules/imu/ins_task.*`、`Modules/algorithm/png_ai/`、`Modules/algorithm/servo_mix_ai/`、`Modules/motor/servo_motor/`、`Modules/message_center/`、`Modules/algorithm/controller/`、`Modules/vofa/`、`Bsp/usart/`、`Bsp/log/`。
 - `UserApp/os_task.c`（任务框架）、`UserApp/robot/dart_fc/`（pre 原型参考）。
+
+---
+
+## 19. H743 板级（已移植，`H743_BOARD`）
+
+> 目标芯片 **STM32H743ZI**（2MB Flash, Cortex-M7）。已实现"能编、能烧、能启动跑遥测"。
+
+- **板级目录**：`Hardware/stm32-h743/`（由 `Hardware/stm32-h7/`(H723) 改造）：
+  - 宏 `-DSTM32H743xx`；CMSIS 设备头 `Drivers/CMSIS/Device/ST/STM32H7xx/Include/stm32h743xx.h`（取自 Keil H743 参考工程，与仓库 H7 HAL **同版本**：`TTCAN_TypeDef`/`AHB1ENR`）。
+  - 时钟：**HSE 25MHz → SYSCLK 480 / HCLK 240 / APB 120**（PLLM=5, PLLN=192, PLLP=2, FLASH_LATENCY_4, VOS0）。
+  - 去掉 H743 不存在的 **FDCAN3**（占位宏 + 不调用）；修 `RCC_USART16910...` → `RCC_USART16CLKSOURCE_D2PCLK2`。
+  - ⚠ 启动/链接脚本**暂用 H723 的 GCC 版**（`Startup/startup_stm32h723vgtx.s`、`STM32H723VGTX_FLASH.ld`）；可启动，但向量表/内存布局非 H743 官方 → 后续替换为 CubeMX H743 版更稳。
+- **构建/烧录**：
+  ```powershell
+  powershell -File make_one\build.ps1 -Robot dart_final -Board H743_BOARD
+  powershell -File Tools\scripts\oneclick_flash.ps1 -Robot dart_final -Board H743_BOARD   # JLink 器件 STM32H743ZI
+  ```
+- **`DART_IMU_ENABLE`**（`dart_final_cfg.h`）：本 H743 板**无 BMI088** → 默认 `0`（跳过 `INS_Init`，否则 `BMI088Init` 读 ID 死等；姿态恒无效）；其他板默认 `1`。
+- **串口**：H743 板级现成 `huart1/5/7`；`DART_USART_ESP32/OPENMV/VOFA` 暂映射 `huart5/huart7/huart1`（**预留 1/2/3 待加 USART2/3**）。
+- **舵机 TIM**：`servo_mix_ai_cfg.h` 按板条件选（H743 默认 `&htim3`，**4 通道 50Hz PWM 待配**，留接口）。
+- **Bsp/Modules 适配**（均为"加 H743 分支"，不改行为）：`Bsp/flash`、`Bsp/can`、`Bsp/pwm`、`Modules/alarm/buzzer`、`Modules/motor/DJImotor`。
+- **实测**：H743 上启动 + FreeRTOS + 各 app 心跳 + 每秒遥测 `[dart] state=1 fault=0x0002`（VISION_OFF 非致命）正常。
+- **待办**：USART1/2/3；舵机 4 通道 PWM；H743 官方启动/链接；BMI088（若板有）。

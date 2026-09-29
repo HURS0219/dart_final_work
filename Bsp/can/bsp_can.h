@@ -2,7 +2,7 @@
 #define BSP_CAN_H
 
 #include <stdint.h>
-#ifdef STM32H723xx
+#if defined(STM32H723xx) || defined(STM32H743xx)
 #include "fdcan.h"
 #define hcan1 hfdcan1
 #define hcan2 hfdcan2
@@ -24,7 +24,7 @@
 /* can instance typedef, every module registered to CAN should have this variable */
 #pragma pack(1)
 typedef struct _ {
-#ifdef STM32H723xx
+#if defined(STM32H723xx) || defined(STM32H743xx)
   FDCAN_HandleTypeDef *can_handle;  // can句柄
   FDCAN_TxHeaderTypeDef txconf;     // CAN报文发送配置
 #elifdef STM32F407xx
@@ -45,7 +45,7 @@ typedef struct _ {
 
 /* CAN实例初始化结构体,将此结构体指针传入注册函数 */
 typedef struct {
-#ifdef STM32H7
+#if defined(STM32H7) || defined(STM32H723xx) || defined(STM32H743xx)
   FDCAN_HandleTypeDef *can_handle;  // can句柄
 #elifdef STM32F407xx
   CAN_HandleTypeDef *can_handle;  // can句柄
