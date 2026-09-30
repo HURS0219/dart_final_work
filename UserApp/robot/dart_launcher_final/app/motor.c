@@ -1,0 +1,589 @@
+/*
+ * motor.c — 电机 app 实现(拉簧 A/B + 丝杆)
+ * =============================================================================
+ * 【分层与解耦】
+ *   本文件是全工程**唯一**直接调用 DJImotor 的地方(yaw 由 app/yaw.c 独占),
+ *   不建 module 层。对外只收发话题(motor_cmd / motor_fb), app 之间零 include。
+ *   CAN 发送由 Modules/motor/motor_task.c 的 DJIMotorTask() 在独立任务里统一负责,
+ *   本 app **不调用** DJIMotorTask()。
+ *
+ * 【本表只含 3 路】拉簧 A / 拉簧 B / 丝杆。
+ *   yaw(M2006, ID1) 由 app/yaw.c 独占注册, 不在此表。
+ *   若此处也注册 yaw, 会在 MotorSenderGrouping 里触发 IDcrash 死循环。
+ *
+ * 【角度制换算】(对外输出侧 deg, 对内转子侧多圈角)
+ *   转子目标 = zero + sign * 输出角 * ratio
+ *   输出角   = sign * (total_angle - zero) / ratio
+ *   sign: 电机被置为反向时, 库会把 total_angle / speed_aps 取负
+ *         (见 dji_motor.c 的 DecodeDJIMotor), 故换算机械方向要乘回符号。
+ *
+ * 【急停策略(逐路, 见 launcher_cfg.h)】
+ *   HOLD_AND_HOME (拉簧 A/B): 锁位保持当前角 -> 以 cfg 速率缓慢归零卸能。
+ *       关键: 全程**不调 DJIMotorStop()**, 也不清 PID 积分 —— 否则电流瞬间归零,
+ *             弹簧立即释放。目标改成"当前位置"后误差自然归零, P/D 项归零而积分项
+ *             保留, 于是 final_output 从上周期连续过渡, 电流一帧都不断。
+ *   RAMP_STOP (自锁丝杆): 速度环减速到零 -> 卸力。自锁保证位置不变, 省电不发热。
+ *
+ * 【掉线处理】拉簧掉线时**绝不卸力**: 继续盲发最后一次的保持电流。
+ *   (DJI 电调本身约 100ms 无报文即停, 软件无法阻止; 但至少不做"主动卸力"这一更坏的选择。)
+ * =============================================================================
+ */
+#include "motor.h"
+
+#include <math.h>
+#include <string.h>
+
+#include "bsp_dwt.h"
+#include "bsp_log.h"
+#include "can.h" /* hcan1 */
+#include "dji_motor.h"
+#include "launcher_cfg.h"
+#include "message_center.h"
+#include "motor_def.h"
+#include "user_lib.h"
+
+/* ============================== 逐路静态配置 ============================== */
+
+/** @brief 单路电机的静态配置(全部来自 launcher_cfg.h, 逐路独立) */
+typedef struct {
+  uint8_t tx_id;                /* CAN 发送 ID */
+  float ratio;                  /* 转子:输出 减速比 */
+  Motor_Reverse_Flag_e reverse; /* 初始方向 */
+
+  /* 行程角度(输出侧 deg) */
+  int16_t deg_zero;
+  int16_t deg_prep;
+  int16_t tol_deg;
+
+  /* 角度环 PID */
+  float angle_kp, angle_ki, angle_kd, angle_ilimit, angle_maxout, angle_deadband;
+
+  Launcher_EstopMode_e estop_mode;
+
+  /* 归零速率(输出侧 deg/s); <=0 表示该路无归零动作(丝杆) */
+  float homing_rate_dps;
+
+  /* 丝杆专用: 到位后是否卸力 */
+  uint8_t stop_at_target;
+} MotorStaticCfg_s;
+
+/* 逐路静态配置表 —— 顺序必须与 Launcher_MotorSlot_e 一致 */
+static const MotorStaticCfg_s kCfg[LAUNCH_M_COUNT] = {
+    /* ---- 拉簧 A (M3508, ID2, 非自锁) ---- */
+    [LAUNCH_M_SPRING_A] =
+        {
+            .tx_id = LAUNCH_SA_ID,
+            .ratio = LAUNCH_SA_RATIO,
+            .reverse = LAUNCH_SA_REVERSE,
+            .deg_zero = LAUNCH_SA_DEG_ZERO,
+            .deg_prep = LAUNCH_SA_DEG_PREP,
+            .tol_deg = LAUNCH_SA_TOL_DEG,
+            .angle_kp = LAUNCH_SA_ANGLE_KP,
+            .angle_ki = LAUNCH_SA_ANGLE_KI,
+            .angle_kd = LAUNCH_SA_ANGLE_KD,
+            .angle_ilimit = LAUNCH_SA_ANGLE_ILIMIT,
+            .angle_maxout = LAUNCH_SA_ANGLE_MAXOUT,
+            .angle_deadband = LAUNCH_SA_ANGLE_DEADBAND,
+            .estop_mode = LAUNCH_SA_ESTOP_MODE,
+            .homing_rate_dps = LAUNCH_SA_HOMING_RATE_DPS,
+            .stop_at_target = 0,
+        },
+    /* ---- 拉簧 B (M3508, ID3, 非自锁) ---- */
+    [LAUNCH_M_SPRING_B] =
+        {
+            .tx_id = LAUNCH_SB_ID,
+            .ratio = LAUNCH_SB_RATIO,
+            .reverse = LAUNCH_SB_REVERSE,
+            .deg_zero = LAUNCH_SB_DEG_ZERO,
+            .deg_prep = LAUNCH_SB_DEG_PREP,
+            .tol_deg = LAUNCH_SB_TOL_DEG,
+            .angle_kp = LAUNCH_SB_ANGLE_KP,
+            .angle_ki = LAUNCH_SB_ANGLE_KI,
+            .angle_kd = LAUNCH_SB_ANGLE_KD,
+            .angle_ilimit = LAUNCH_SB_ANGLE_ILIMIT,
+            .angle_maxout = LAUNCH_SB_ANGLE_MAXOUT,
+            .angle_deadband = LAUNCH_SB_ANGLE_DEADBAND,
+            .estop_mode = LAUNCH_SB_ESTOP_MODE,
+            .homing_rate_dps = LAUNCH_SB_HOMING_RATE_DPS,
+            .stop_at_target = 0,
+        },
+    /* ---- 丝杆 (M3508, ID4, 自锁, 不参与状态机) ---- */
+    [LAUNCH_M_SCREW] =
+        {
+            .tx_id = LAUNCH_SC_ID,
+            .ratio = LAUNCH_SC_RATIO,
+            .reverse = LAUNCH_SC_REVERSE,
+            .deg_zero = 0,
+            .deg_prep = LAUNCH_SC_DEG_PREP,
+            .tol_deg = LAUNCH_SC_TOL_DEG,
+            .angle_kp = LAUNCH_SC_ANGLE_KP,
+            .angle_ki = LAUNCH_SC_ANGLE_KI,
+            .angle_kd = LAUNCH_SC_ANGLE_KD,
+            .angle_ilimit = LAUNCH_SC_ANGLE_ILIMIT,
+            .angle_maxout = LAUNCH_SC_ANGLE_MAXOUT,
+            .angle_deadband = 0.0f,
+            .estop_mode = LAUNCH_SC_ESTOP_MODE,
+            .homing_rate_dps = 0.0f, /* 自锁, 无归零 */
+            .stop_at_target = LAUNCH_SC_STOP_AT_TARGET,
+        },
+    /* 注意: yaw(M2006, ID1) **不在此表**!
+     * 它有独立的 app/yaw.c 独占注册并做视觉闭环。
+     * 若在这里再注册一次, 会在 MotorSenderGrouping 里触发 IDcrash 死循环。 */
+};
+
+/* ============================== 逐路运行态 ============================== */
+
+/** @brief 单路运行时状态 */
+typedef struct {
+  DJIMotorInstance *inst;
+  float zero;         /* 零点(转子侧 total_angle 快照) */
+  uint8_t zero_valid; /* 1=已取零 */
+  uint32_t last_feed; /* 判在线: 上次 feed_cnt */
+  uint8_t online;     /* 1=CAN 有回传 */
+  float last_angle;   /* 上周期输出侧角(算速率用) */
+
+  /* 指令镜像 */
+  uint8_t mode; /* Launcher_MotorMode_e */
+  float target; /* 输出侧: 速度=rpm, 角度=deg */
+
+  /* 急停相关 */
+  float hold_angle;  /* HOLD 模式锁存的目标角(已含归零轨迹) */
+  uint8_t latched;   /* 1=已锁存 */
+  float last_output; /* 掉线盲发用: 最后一次 final_output */
+  uint8_t stopped;   /* 1=已卸力(电流=0) */
+} MotorRuntime_s;
+
+static MotorRuntime_s s_rt[LAUNCH_M_COUNT];
+
+/* 急停是"保持型"状态: 一旦置位即持续生效, 直到显式解除。
+ * 放在文件作用域(而非循环内), 因为执行分支与反馈分支都要读它。 */
+static uint8_t s_estop_latch = 0;
+
+static Subscriber_t *s_sub_cmd = NULL;
+static Publisher_t *s_pub_fb = NULL;
+static Publisher_t *s_pub_param = NULL;
+static Launcher_AppStatus_s s_st;
+static Launcher_MotorFb_s s_fb;
+static Launcher_MotorParam_s s_param;
+
+/* ============================== 工具函数 ============================== */
+
+/** @brief 取某路的方向符号(反向时库已把 total_angle 取负) */
+static float SignOf(const MotorRuntime_s *r) {
+  return (r->inst->motor_settings.motor_reverse_flag == MOTOR_DIRECTION_REVERSE) ? -1.0f : 1.0f;
+}
+
+/** @brief 输出侧角度(deg, 相对零点, 已含方向) */
+static float OutDeg(int i) {
+  const MotorRuntime_s *r = &s_rt[i];
+  if (!r->zero_valid) return 0.0f;
+  return SignOf(r) * (r->inst->measure.total_angle - r->zero) / kCfg[i].ratio;
+}
+
+/** @brief 输出侧转速(rpm)。speed_aps 单位 deg/s, 故 /6 得 rpm */
+static float OutRpm(int i) {
+  const MotorRuntime_s *r = &s_rt[i];
+  float ratio = (kCfg[i].ratio > 0.01f) ? kCfg[i].ratio : 1.0f;
+  return r->inst->measure.speed_aps / 6.0f / ratio;
+}
+
+/** @brief 输出侧角度 -> 转子侧目标(供 DJIMotorSetPIDRef 用) */
+static float RotorRef(int i, float out_deg) {
+  const MotorRuntime_s *r = &s_rt[i];
+  return r->zero + SignOf(r) * out_deg * kCfg[i].ratio;
+}
+
+/** @brief 到位判定(输出侧容差) */
+static uint8_t AtTarget(int i) {
+  return (fabsf(OutDeg(i) - s_rt[i].target) < (float)kCfg[i].tol_deg) ? 1u : 0u;
+}
+
+/** @brief 以角度环下发一个"输出侧目标"到电机 */
+static void ApplyAngle(int i, float out_deg) {
+  MotorRuntime_s *r = &s_rt[i];
+  DJIMotorEnable(r->inst);
+  DJIMotorOuterLoop(r->inst, ANGLE_LOOP);
+  DJIMotorSetPIDRef(r->inst, RotorRef(i, out_deg));
+  r->stopped = 0;
+}
+
+/** @brief 以速度环下发一个"输出侧转速目标"(rpm) */
+static void ApplySpeed(int i, float rpm) {
+  MotorRuntime_s *r = &s_rt[i];
+  DJIMotorEnable(r->inst);
+  DJIMotorOuterLoop(r->inst, SPEED_LOOP);
+  /* 转子侧速度(deg/s) = 输出 rpm * ratio * 6 */
+  DJIMotorSetPIDRef(r->inst, SignOf(r) * rpm * kCfg[i].ratio * 6.0f);
+  r->stopped = 0;
+}
+
+/**
+ * @brief 卸力(电流置零)
+ * @note  【安全】仅对"自锁丝杆"使用!
+ *        拉簧 A/B 非自锁, 卸力会让弹簧瞬间释放 —— 那里必须走"保持 -> 归零"。
+ *        调用点必须带 estop_mode / stop_at_target 守卫。
+ */
+static void Coast(int i) {
+  DJIMotorStop(s_rt[i].inst);
+  s_rt[i].stopped = 1;
+}
+
+/* ============================== 初始化 ============================== */
+
+/** @brief 构造一路 DJI 电机的初始化配置(M3508) */
+static Motor_Init_Config_s MakeCfg(int i) {
+  const MotorStaticCfg_s *c = &kCfg[i];
+  Motor_Init_Config_s cfg;
+  memset(&cfg, 0, sizeof(cfg));
+
+  cfg.motor_type = M3508; /* 本表 3 路均为 M3508(yaw 由 app/yaw 单独管理) */
+  cfg.can_init_config.can_handle = &hcan1;
+  cfg.can_init_config.tx_id = c->tx_id;
+
+  cfg.controller_setting_init_config.angle_feedback_source = MOTOR_FEED;
+  cfg.controller_setting_init_config.speed_feedback_source = MOTOR_FEED;
+  cfg.controller_setting_init_config.outer_loop_type = ANGLE_LOOP; /* 上电默认角度环 */
+  cfg.controller_setting_init_config.close_loop_type = SPEED_LOOP | ANGLE_LOOP;
+  cfg.controller_setting_init_config.motor_reverse_flag = c->reverse;
+  cfg.controller_setting_init_config.feedback_reverse_flag =
+      (c->reverse == MOTOR_DIRECTION_REVERSE) ? FEEDBACK_DIRECTION_REVERSE
+                                              : FEEDBACK_DIRECTION_NORMAL;
+
+  /* 角度环 PID —— 保持弹簧的关键参数
+   * Improve 用"最小必要集": 积分限幅(有 Ki 就必须有) + 微分先行(急停时目标跳到当前角,
+   * 误差会突变; 对测量值微分则不受设定值跳变影响, 避免瞬间冲量)。 */
+  cfg.controller_param_init_config.angle_PID.Kp = c->angle_kp;
+  cfg.controller_param_init_config.angle_PID.Ki = c->angle_ki;
+  cfg.controller_param_init_config.angle_PID.Kd = c->angle_kd;
+  cfg.controller_param_init_config.angle_PID.IntegralLimit = c->angle_ilimit;
+  cfg.controller_param_init_config.angle_PID.MaxOut = c->angle_maxout;
+  cfg.controller_param_init_config.angle_PID.DeadBand = c->angle_deadband;
+  cfg.controller_param_init_config.angle_PID.Improve =
+      PID_Integral_Limit | PID_Derivative_On_Measurement;
+
+  return cfg;
+}
+
+void Motor_Init(void) {
+  for (int i = 0; i < LAUNCH_M_COUNT; i++) {
+    MotorRuntime_s *r = &s_rt[i];
+    memset(r, 0, sizeof(*r));
+
+    Motor_Init_Config_s cfg = MakeCfg(i);
+    r->inst = DJIMotorInit(&cfg);
+    if (r->inst == NULL) {
+      LOGERROR("[motor] DJIMotorInit FAIL slot=%d id=%d", i, kCfg[i].tx_id);
+      continue;
+    }
+    /* 上电先停, 等首次反馈取零后由指令/状态机接管。
+     * 【安全】上电瞬间弹簧处于自然状态(未上膛), 此时卸力是安全的;
+     *        一旦取零完成且收到上膛指令, 就不再允许对拉簧卸力(见 ApplyNormal)。 */
+    DJIMotorStop(r->inst);
+    r->stopped = 1;
+    r->mode = LAUNCH_MODE_STOP;
+  }
+
+  memset(&s_fb, 0, sizeof(s_fb));
+  memset(&s_param, 0, sizeof(s_param));
+  memset(&s_st, 0, sizeof(s_st));
+  s_sub_cmd = SubRegister(TOPIC_MOTOR_CMD, sizeof(Launcher_MotorCmd_s));
+  s_pub_fb = PubRegister(TOPIC_MOTOR_FB, sizeof(Launcher_MotorFb_s));
+  s_pub_param = PubRegister(TOPIC_MOTOR_PARAM, sizeof(Launcher_MotorParam_s));
+
+  LOGINFO("[motor] init done (%d slots)", LAUNCH_M_COUNT);
+}
+
+/* ============================== 逐路状态刷新 ============================== */
+
+/** @brief 刷新在线状态与自动取零(首次收到反馈即把该位置记为 0) */
+static void Refresh(int i) {
+  MotorRuntime_s *r = &s_rt[i];
+  DJIMotorInstance *m = r->inst;
+
+  if (m->feed_cnt != r->last_feed) {
+    r->last_feed = m->feed_cnt;
+    r->online = 1;
+  }
+  /* 首次收到反馈自动取零: 上电位置即"弹簧起点" */
+  if (m->feed_cnt > 0 && !r->zero_valid) {
+    r->zero = m->measure.total_angle;
+    r->zero_valid = 1;
+    r->last_angle = 0.0f;
+    LOGINFO("[motor] slot=%d zero latched", i);
+  }
+}
+
+/* ============================== 急停策略 ============================== */
+
+/**
+ * @brief 拉簧急停: 锁位保持 + 缓慢归零(急救卸能)
+ * @note  【关键】全程不调 DJIMotorStop(), 也不清 PID 状态。
+ *        目标从"预备位"改成"当前位置"时误差瞬间归零: P/D 项自然为 0,
+ *        而积分项保留 -> final_output 从上周期连续过渡, 电流一帧都不断。
+ *        之后每周期把目标以 cfg 速率朝零位推进, 实现"缓慢卸能"。
+ */
+static void EstopHoldAndHome(int i, float dt) {
+  MotorRuntime_s *r = &s_rt[i];
+  const MotorStaticCfg_s *c = &kCfg[i];
+
+  if (!r->zero_valid) return; /* 还没取零, 无法保持 */
+
+  if (!r->latched) {
+    /* 首次进入急停: 锁存当前角(而不是清 PID), 保证电流连续 */
+    r->hold_angle = OutDeg(i);
+    r->latched = 1;
+    LOGINFO("[motor] slot=%d ESTOP hold", i);
+  }
+
+  /* 以 cfg 速率把保持目标朝零位推进(恒定速度, 与误差大小无关) */
+  float step = c->homing_rate_dps * dt;
+  if (step > 0.0f) {
+    float goal = (float)c->deg_zero;
+    float diff = goal - r->hold_angle;
+    if (fabsf(diff) <= step) {
+      r->hold_angle = goal;
+    } else {
+      r->hold_angle += (diff > 0.0f) ? step : -step;
+    }
+  }
+
+  /* 保持使能 + 角度环 + 目标 = 锁存并缓慢移动的角(绝不 Stop) */
+  ApplyAngle(i, r->hold_angle);
+}
+
+/** @brief 自锁丝杆急停: 速度环减速到零, 再卸力(避免自锁硬抓造成冲击) */
+static void EstopRampStop(int i) {
+  float rpm = OutRpm(i);
+
+  if (fabsf(rpm) > 20.0f) {
+    /* 还在转: 给反向小转速把它拉停(速度环) */
+    float brake = (rpm > 0.0f) ? -50.0f : 50.0f;
+    ApplySpeed(i, brake);
+  } else {
+    /* 已基本停住: 自锁兜底, 卸力(省电不发热) */
+    Coast(i);
+  }
+}
+
+/** @brief 无储能轴急停: 直接卸力(本表 3 路均不用, 保留以兼容策略枚举) */
+static void EstopCoast(int i) { Coast(i); }
+
+/* ============================== 周期任务 ============================== */
+
+/** @brief 按 mode 下发常规(非急停)指令 */
+static void ApplyNormal(int i) {
+  MotorRuntime_s *r = &s_rt[i];
+
+  switch (r->mode) {
+    case LAUNCH_MODE_STOP:
+      /* 【安全】拉簧 A/B 非自锁, "STOP" 绝不能解释为卸力 —— 那会让弹簧瞬间释放。
+       * 这里把 STOP 降级为"就地保持": 继续用角度环顶住当前位置。
+       * 需要主动卸能时, 走急停路径的 HOLD_AND_HOME(缓慢归零)。 */
+      if (kCfg[i].estop_mode == LAUNCH_ESTOP_HOLD_AND_HOME) {
+        if (r->zero_valid) {
+          ApplyAngle(i, OutDeg(i)); /* 目标 = 当前位置, 保持力矩 */
+        } else {
+          DJIMotorStop(r->inst); /* 还没取零, 无法保持 */
+          r->stopped = 1;
+        }
+      } else {
+        Coast(i); /* 自锁丝杆: 可以卸力 */
+      }
+      break;
+    case LAUNCH_MODE_SPEED:
+      ApplySpeed(i, r->target);
+      break;
+    case LAUNCH_MODE_ANGLE:
+    default:
+      ApplyAngle(i, r->target);
+      break;
+  }
+}
+
+void Motor_Task(void) {
+  uint32_t t0 = (uint32_t)DWT_GetTimeline_us();
+  static uint32_t last_ms = 0;
+  uint32_t now = (uint32_t)DWT_GetTimeline_ms();
+  float dt = (now - last_ms) * 0.001f; /* 秒 */
+  if (last_ms == 0 || dt <= 0.0f || dt > 0.5f) dt = 0.001f;
+  last_ms = now;
+
+  Launcher_MotorCmd_s cmd;
+  uint8_t have_cmd = SubGetMessage(s_sub_cmd, &cmd);
+  if (have_cmd) {
+    for (int i = 0; i < LAUNCH_M_COUNT; i++) {
+      MotorRuntime_s *r = &s_rt[i];
+
+      /* ---- 单次请求: 取零 / 复位 / 换向 ---- */
+      if (cmd.zero_req[i] && r->inst != NULL) {
+        r->zero = r->inst->measure.total_angle;
+        r->zero_valid = 1;
+        LOGINFO("[motor] slot=%d manual zero", i);
+      }
+      if (cmd.reset_req[i] && r->inst != NULL) {
+        /* 复位到 cfg 默认值(逐路独立, 不共用) */
+        const MotorStaticCfg_s *c = &kCfg[i];
+        PIDInstance *ap = &r->inst->motor_controller.angle_PID;
+        ap->Kp = c->angle_kp;
+        ap->Ki = c->angle_ki;
+        ap->Kd = c->angle_kd;
+        ap->IntegralLimit = c->angle_ilimit;
+        ap->MaxOut = c->angle_maxout;
+        ap->DeadBand = c->angle_deadband;
+      }
+      if (cmd.dir_req[i] && r->inst != NULL) {
+        DJIMotorInstance *m = r->inst;
+        Motor_Reverse_Flag_e nr = (m->motor_settings.motor_reverse_flag == MOTOR_DIRECTION_NORMAL)
+                                      ? MOTOR_DIRECTION_REVERSE
+                                      : MOTOR_DIRECTION_NORMAL;
+        m->motor_settings.motor_reverse_flag = nr;
+        m->motor_settings.feedback_reverse_flag =
+            (nr == MOTOR_DIRECTION_REVERSE) ? FEEDBACK_DIRECTION_REVERSE
+                                            : FEEDBACK_DIRECTION_NORMAL;
+        r->zero = m->measure.total_angle; /* 方向变了重新取零 */
+        r->zero_valid = 1;
+      }
+
+      /* ---- 持续设定: 模式 + 目标 ---- */
+      r->mode = cmd.mode[i];
+      r->target = cmd.target[i];
+    }
+
+    /* ---- 参数设定(P,slot,id,value): 直接改该路 PID 字段(无中间层) ---- */
+    if (cmd.set_param && cmd.param_slot >= 0 && cmd.param_slot < LAUNCH_M_COUNT) {
+      int i = cmd.param_slot;
+      PIDInstance *ap = &s_rt[i].inst->motor_controller.angle_PID;
+      switch (cmd.param_id) {
+        case LAUNCH_PID_ANGLE_KP: ap->Kp = cmd.param_value; break;
+        case LAUNCH_PID_ANGLE_KI: ap->Ki = cmd.param_value; break;
+        case LAUNCH_PID_ANGLE_KD: ap->Kd = cmd.param_value; break;
+        case LAUNCH_PID_ANGLE_DEADBAND: ap->DeadBand = cmd.param_value; break;
+        case LAUNCH_PID_ANGLE_MAXOUT: ap->MaxOut = cmd.param_value; break;
+        case LAUNCH_PID_GEAR_RATIO:
+          /* 减速比是"静态配置", 运行时改会破坏换算一致性:
+           * 本工程按规范"参数只放 cfg", 故运行期拒绝改比值。 */
+          LOGWARNING("[motor] slot=%d runtime ratio change ignored (cfg only)", i);
+          break;
+        default:
+          /* 速度环参数(id 1~5): 本表 3 路均为角度环, 无速度环, 忽略 */
+          break;
+      }
+      LOGINFO("[motor] slot=%d param id=%d set", i, cmd.param_id);
+    }
+
+    /* ---- 急停解除: 清锁存, 让后续指令重新接管 ----
+     * 【安全】拉簧不在此处卸力! 解除急停只是"允许新指令接管", 弹簧必须继续被顶住,
+     *        否则解除瞬间会释放。故这里只清状态, 由下面的 ApplyNormal 维持保持力矩。 */
+    if (cmd.estop_clr) {
+      for (int i = 0; i < LAUNCH_M_COUNT; i++) {
+        s_rt[i].latched = 0;
+        s_rt[i].mode = LAUNCH_MODE_STOP; /* 交给 ApplyNormal: 拉簧->就地保持, 其它->卸力 */
+        s_rt[i].target = 0.0f;
+        if (kCfg[i].estop_mode != LAUNCH_ESTOP_HOLD_AND_HOME) {
+          Coast(i); /* 仅自锁丝杆可卸力 */
+        }
+      }
+      LOGINFO("[motor] estop cleared (springs remain held)");
+    }
+  }
+
+  /* ---- 逐路执行 ---- */
+  uint16_t err = LAUNCH_ERR_NONE;
+  for (int i = 0; i < LAUNCH_M_COUNT; i++) {
+    MotorRuntime_s *r = &s_rt[i];
+    if (r->inst == NULL) continue;
+
+    Refresh(i);
+
+    if (have_cmd) {
+      if (cmd.estop) s_estop_latch = 1;
+      if (cmd.estop_clr) s_estop_latch = 0;
+    }
+
+    if (s_estop_latch) {
+      switch (kCfg[i].estop_mode) {
+        case LAUNCH_ESTOP_HOLD_AND_HOME: EstopHoldAndHome(i, dt); break;
+        case LAUNCH_ESTOP_RAMP_STOP: EstopRampStop(i); break;
+        case LAUNCH_ESTOP_COAST:
+        default: EstopCoast(i); break;
+      }
+    } else if (r->zero_valid) {
+      /* 丝杆到位后卸力(自锁兜底, 省电不发热) */
+      if (kCfg[i].stop_at_target && r->mode == LAUNCH_MODE_ANGLE &&
+          fabsf(OutDeg(i) - r->target) < (float)kCfg[i].tol_deg && !r->stopped) {
+        Coast(i);
+      } else {
+        ApplyNormal(i);
+      }
+    }
+
+    /* 记录最后输出(掉线盲发用) */
+    r->last_output = r->inst->motor_controller.final_output;
+
+    /* ---- 掉线保护 ---- */
+    if (!r->online && r->last_feed > 0) {
+      if (kCfg[i].estop_mode == LAUNCH_ESTOP_HOLD_AND_HOME) {
+        /* ★ 拉簧掉线绝不卸力: 盲发最后一次保持电流(尽力维持弹簧平衡) */
+        DJIMotorEnable(r->inst);
+        DJIMotorSetRef(r->inst, r->last_output);
+        err |= LAUNCH_ERR_SPRING_OFF;
+      }
+    }
+  }
+
+  /* ============================== 发布反馈 ============================== */
+  for (int i = 0; i < LAUNCH_M_COUNT; i++) {
+    MotorRuntime_s *r = &s_rt[i];
+    DJIMotorInstance *m = r->inst;
+    if (m == NULL) continue;
+
+    s_fb.online[i] = r->online;
+    s_fb.reverse[i] = (m->motor_settings.motor_reverse_flag == MOTOR_DIRECTION_REVERSE) ? 1u : 0u;
+    s_fb.mode[i] = r->mode;
+    s_fb.target[i] = r->target;
+    s_fb.rpm[i] = OutRpm(i);
+    s_fb.angle_deg[i] = OutDeg(i);
+    s_fb.temperature[i] = (float)m->measure.temperature;
+    s_fb.current[i] = (float)m->measure.real_current;
+    s_fb.at_target[i] = r->zero_valid ? AtTarget(i) : 0u;
+
+    /* 保持/归零标志 */
+    if (s_estop_latch && kCfg[i].estop_mode == LAUNCH_ESTOP_HOLD_AND_HOME) {
+      s_fb.holding[i] = 1;
+      /* 还在朝零位移动则算"归零中" */
+      s_fb.homing[i] = (fabsf(r->hold_angle - (float)kCfg[i].deg_zero) > 0.5f) ? 1u : 0u;
+    } else {
+      s_fb.holding[i] = 0;
+      s_fb.homing[i] = 0;
+    }
+
+    /* 参数回显走独立话题(顺序同 Launcher_ParamId_e)
+     * 说明: 参数有 176 字节, 与 MotorFb 合并会超过 message_center 的
+     *       uint8_t data_len 上限(255), 故单列 "motor_param" 话题。
+     *       本表 3 路均为角度环, 速度环参数填 0。 */
+    PIDInstance *ap = &m->motor_controller.angle_PID;
+    s_param.param[i][LAUNCH_PID_SPEED_KP - 1] = 0.0f;
+    s_param.param[i][LAUNCH_PID_SPEED_KI - 1] = 0.0f;
+    s_param.param[i][LAUNCH_PID_SPEED_KD - 1] = 0.0f;
+    s_param.param[i][LAUNCH_PID_SPEED_ILIMIT - 1] = 0.0f;
+    s_param.param[i][LAUNCH_PID_SPEED_MAXOUT - 1] = 0.0f;
+    s_param.param[i][LAUNCH_PID_ANGLE_KP - 1] = ap->Kp;
+    s_param.param[i][LAUNCH_PID_ANGLE_KI - 1] = ap->Ki;
+    s_param.param[i][LAUNCH_PID_ANGLE_KD - 1] = ap->Kd;
+    s_param.param[i][LAUNCH_PID_ANGLE_DEADBAND - 1] = ap->DeadBand;
+    s_param.param[i][LAUNCH_PID_ANGLE_MAXOUT - 1] = ap->MaxOut;
+    s_param.param[i][LAUNCH_PID_GEAR_RATIO - 1] = kCfg[i].ratio;
+  }
+  s_fb.tick = now;
+  PubPushMessage(s_pub_fb, &s_fb);
+
+  s_param.tick = now;
+  PubPushMessage(s_pub_param, &s_param);
+
+  s_st.hb++;
+  s_st.dt_us = (float)(DWT_GetTimeline_us() - t0);
+  s_st.key = s_fb.angle_deg[LAUNCH_M_SPRING_A]; /* 关键量: A 拉簧输出角 */
+  s_st.err = err;
+}
+
+const Launcher_AppStatus_s *Motor_GetStatus(void) { return &s_st; }
