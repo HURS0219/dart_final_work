@@ -258,6 +258,14 @@ void Vision_GetScan(uint32_t *c1, uint32_t *c3, uint32_t *c6) {
 }
 #endif
 
+uint32_t Vision_SckEdges(void) {
+#if DF1_VISION_SPI && DF1_SPI_SCKDIAG
+  return s_sck_edges;
+#else
+  return 0;
+#endif
+}
+
 /* 自检: 往视觉串口发一帧有效帧(x=160,y=120)。把 TX<->RX 短接即可自收, 验证串口链。
  * 返回 HAL 发送结果(HAL_OK=0)。 */
 int Vision_TxTest(void) {

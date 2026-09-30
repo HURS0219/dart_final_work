@@ -40,6 +40,8 @@
 #include "guidance.h"
 #include "imu.h"
 #include "vision.h"
+#include "esp_link.h"
+#include "usart.h"
 
 RobotInstance *robot = NULL;
 
@@ -184,6 +186,8 @@ static void Reply(const char *s) {
   if (s != NULL) SEGGER_RTT_WriteString(0, s);
 }
 
+static void PrintEsp(void);
+
 static void PrintState(void) {
   char buf[260];
   uint32_t vok = 0, vbad = 0;
@@ -210,10 +214,34 @@ static void PrintState(void) {
              (unsigned)c1, (unsigned)c3, (unsigned)c6, (unsigned)Vision_SckEdges());
     Reply(buf);
   }
+#if DF1_ESP_ENABLE
+  PrintEsp();
+#endif
 }
 
-static int ParseArgs(char *line, float *out, int n) {
-  int cnt = 0;
+static void PrintEsp(void) {
+  char buf[200];
+#if DF1_ESP_ENABLE
+  EspLink_Stats_s e;
+  EspLink_GetStats(&e);
+  snprintf(buf, sizeof(buf),
+           "[dart1] esp ok=%u tx=%u rxB=%u rxL=%u pong=%u hb=%u F=%u last='%s'\r\n",
+           (unsigned)e.link_ok, (unsigned)e.tx_frames, (unsigned)e.rx_bytes,
+           (unsigned)e.rx_lines, (unsigned)e.pong, (unsigned)e.hb, (unsigned)e.tele,
+           e.last_line);
+  Reply(buf);
+  snprintf(buf, sizeof(buf),
+           "[dart1] esp hw baud=%u pclk=%u err=0x%X g=%u rx=%u dmarx=%u txd=%u\r\n",
+           (unsigned)huart1.Init.BaudRate, (unsigned)HAL_RCC_GetPCLK2Freq(),
+           (unsigned)huart1.ErrorCode, (unsigned)huart1.gState, (unsigned)huart1.RxState,
+           (unsigned)(huart1.hdmarx ? huart1.hdmarx->State : 0xFF), (unsigned)e.tx_done);
+#else
+  snprintf(buf, sizeof(buf), "[dart1] esp disabled\r\n");
+#endif
+  Reply(buf);
+}
+
+static int ParseArgs(char *line, float *out, int n) {  int cnt = 0;
   char *p = line;
   while (p != NULL && cnt < n) {
     char *comma = strchr(p, ',');
@@ -300,6 +328,19 @@ static void HandleLine(char *line) {
     s_log_period_ms = strtof(line + 4, NULL);
     return;
   }
+  if (strcmp(line, "ESP") == 0) {
+    PrintEsp();
+    return;
+  }
+  if (strcmp(line, "ESPPING") == 0) {
+#if DF1_ESP_ENABLE
+    EspLink_Send("PING\n");
+    Reply("ESP PING sent\r\n");
+#else
+    Reply("ESP disabled\r\n");
+#endif
+    return;
+  }
   Reply("ERR\r\n");
 }
 
@@ -336,6 +377,9 @@ void RobotInit(void) {
 #endif
   Guidance_Init();
   Fin_Init();
+#if DF1_ESP_ENABLE
+  EspLink_Init();
+#endif
 
   s_app_en[A_IMU] = DF1_IMU_ENABLE ? 1u : 0u;
   s_app_en[A_VISION] = DF1_VISION_ENABLE ? 1u : 0u;
@@ -363,7 +407,7 @@ void RobotInit(void) {
   LOGINFO("[dart1] init done (IMU_EN=%d VIS_EN=%d)", DF1_IMU_ENABLE, DF1_VISION_ENABLE);
   Reply("\r\n=== dart_final_1 ready ===\r\n"
         "cmds: PING | EN,<0|1> | IMUEN,<0|1> | VISEN,<0|1> | ATT,<r>,<p>,<y> | TGT,<x>,<y> | TGTN | "
-        "FAULT,<hex> | CLRFAULT | LOG,<ms> | STAT\r\n");
+        "FAULT,<hex> | CLRFAULT | LOG,<ms> | STAT | ESP | ESPPING\r\n");
 }
 
 void RobotTask(void) {
@@ -386,6 +430,9 @@ void RobotTask(void) {
   /* 1) 输入 app */
   if (s_app_en[A_IMU]) Imu_Task();
   if (s_app_en[A_VISION]) Vision_Task();
+#if DF1_ESP_ENABLE
+  EspLink_Task();
+#endif
 
   /* 2) 看最新输入 -> 监控 -> 状态机 */
   PollInputs();

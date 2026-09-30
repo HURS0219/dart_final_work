@@ -6,6 +6,7 @@
  * @note  F4 只有 sysmem.c(_sbrk), 缺少 stdio 所需的 syscall 桩; app 用 snprintf 会链接失败。
  *        按团队规则(底层库不改), 在 app 目录内补最小实现。输出统一走 RTT, 不经 _write。
  */
+#if !defined(STM32H743xx)
 #include <errno.h>
 #include <sys/stat.h>
 
@@ -59,3 +60,5 @@ int _lseek(int file, int ptr, int dir) {
   (void)dir;
   return 0;
 }
+
+#endif /* !STM32H743xx */
