@@ -24,6 +24,20 @@
 #include "tim.h"
 #include "user_lib.h"
 
+/* IMU 后端选择: dart 实板用 ICM-42688(SPI2); 其它板沿用 BMI088 */
+#if defined(DART_F405_BOARD)
+#include "ICM42688driver.h"
+#define IMU_DEV        ICM42688
+#define IMU_Read()     ICM42688_Read(&ICM42688)
+#define IMU_Init(h, c) ICM42688_Init((h), (c))
+#define IMU_NO_ERROR   ICM42688_NO_ERROR
+#else
+#define IMU_DEV        BMI088
+#define IMU_Read()     BMI088_Read(&BMI088)
+#define IMU_Init(h, c) BMI088Init((h), (c))
+#define IMU_NO_ERROR   BMI088_NO_ERROR
+#endif
+
 static INS_t INS;
 static IMU_Init_Config_s IMU_Param;
 // BMI088Instance* BMI;
@@ -54,7 +68,7 @@ static void IMUPWMSet(uint16_t pwm) {
  *
  */
 static void IMU_Temperature_Ctrl(void) {
-  PIDCalculate(&TempCtrl, BMI088.Temperature, 40);
+  PIDCalculate(&TempCtrl, IMU_DEV.Temperature, 40);
   IMUPWMSet(float_constrain(float_rounding(TempCtrl.Output), 0, UINT32_MAX));
 }
 
@@ -65,11 +79,11 @@ static void InitQuaternion(float *init_q4) {
   float axis_rot[3] = {0};            // 旋转轴
   // 读取100次加速度计数据,取平均值作为初始值
   for (uint8_t i = 0; i < 100; ++i) {
-    BMI088_Read(&BMI088);
-    IMU_Param_Correction(&IMU_Param, BMI088.Gyro, BMI088.Accel);
-    acc_init[X] += BMI088.Accel[X];  // X轴不变
-    acc_init[Y] += BMI088.Accel[Y];  // Y轴取反
-    acc_init[Z] += BMI088.Accel[Z];  // Z轴取反
+    IMU_Read();
+    IMU_Param_Correction(&IMU_Param, IMU_DEV.Gyro, IMU_DEV.Accel);
+    acc_init[X] += IMU_DEV.Accel[X];  // X轴不变
+    acc_init[Y] += IMU_DEV.Accel[Y];  // Y轴取反
+    acc_init[Z] += IMU_DEV.Accel[Z];  // Z轴取反
     DWT_Delay(0.001);
   }
   for (uint8_t i = 0; i < 3; ++i) acc_init[i] /= 100;
@@ -138,28 +152,34 @@ static void INS_CalibrateGyroForDebug(uint16_t sample_count) {
 
   // 重置陀螺仪偏差值
   for (uint8_t i = 0; i < 3; i++) {
-    BMI088.GyroOffset[i] = 0.0f;
+    IMU_DEV.GyroOffset[i] = 0.0f;
   }
 
   // 采集指定次数的数据
   for (uint16_t i = 0; i < sample_count; i++) {
 
+#if defined(DART_F405_BOARD)
+    IMU_Read();
+    IMU_Temperature_Ctrl();
+    DWT_Delay(0.001);
+#else
     do {
-      BMI088_Read(&BMI088);
+      IMU_Read();
       IMU_Temperature_Ctrl();
       DWT_Delay(0.001);
-    } while (BMI088.Temperature <= 39.0f || BMI088.Temperature >= 41.0f);
+    } while (IMU_DEV.Temperature <= 39.0f || IMU_DEV.Temperature >= 41.0f);
+#endif
 
     // 累加陀螺仪读数
     for (uint8_t j = 0; j < 3; j++) {
-      gyro_sum[j] += BMI088.Gyro[j];
+      gyro_sum[j] += IMU_DEV.Gyro[j];
     }
     DWT_Delay(0.001);  // 1ms延时
   }
 
   // 计算平均值作为零偏
   for (uint8_t i = 0; i < 3; i++) {
-    BMI088.GyroOffset[i] = gyro_sum[i] / sample_count;
+    IMU_DEV.GyroOffset[i] = gyro_sum[i] / sample_count;
   }
 }
 
@@ -175,9 +195,11 @@ INS_t *INS_Init(IMU_Init_Config_s *imu_init_config) {
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
 #endif
 #ifdef STM32F407xx
-  while (BMI088Init(&hspi1, 0) != BMI088_NO_ERROR);
+  while (IMU_Init(&hspi1, 0) != IMU_NO_ERROR);
 #elifdef STM32H7
-  while (BMI088Init(&hspi2, 0) != BMI088_NO_ERROR);
+  while (IMU_Init(&hspi2, 0) != IMU_NO_ERROR);
+#elif defined(DART_F405_BOARD)
+  while (IMU_Init(&hspi2, 0) != IMU_NO_ERROR);
 #endif
   // 使用我们的调试校准函数来测量陀螺仪零偏值，绕过预定义值
 
@@ -192,21 +214,21 @@ INS_t *INS_Init(IMU_Init_Config_s *imu_init_config) {
   PIDInit(&TempCtrl, &config);
 
   for (int i=0;i<1000;i++) {
-    BMI088_Read(&BMI088);
+    IMU_Read();
     IMU_Temperature_Ctrl();
     DWT_Delay(0.001);
   }
   //是否在线标定
   if (imu_init_config->offset_flag==1) {
     for (uint8_t i=0;i<3;i++)
-      BMI088.GyroOffset[i]=imu_init_config->GyroOffset[i];
+      IMU_DEV.GyroOffset[i]=imu_init_config->GyroOffset[i];
   }
   else {
     INS_CalibrateGyroForDebug(5000);
   }
 
   // 手动计算加速度缩放因子，因为我们跳过了完整的校准过程
-  BMI088.AccelScale = 9.81f / BMI088.gNorm;
+  IMU_DEV.AccelScale = 9.81f / IMU_DEV.gNorm;
   IMU_Param.scale[X] = imu_init_config->scale[X];
   IMU_Param.scale[Y] = imu_init_config->scale[Y];
   IMU_Param.scale[Z] = imu_init_config->scale[Z];
@@ -245,14 +267,14 @@ void INS_Task(void) {
 
   // ins update
   if ((count % 1) == 0) {
-    BMI088_Read(&BMI088);
+    IMU_Read();
 
-    INS.Accel[X] = BMI088.Accel[X];
-    INS.Accel[Y] = BMI088.Accel[Y];
-    INS.Accel[Z] = BMI088.Accel[Z];
-    INS.Gyro[X] = BMI088.Gyro[X];
-    INS.Gyro[Y] = BMI088.Gyro[Y];
-    INS.Gyro[Z] = BMI088.Gyro[Z];
+    INS.Accel[X] = IMU_DEV.Accel[X];
+    INS.Accel[Y] = IMU_DEV.Accel[Y];
+    INS.Accel[Z] = IMU_DEV.Accel[Z];
+    INS.Gyro[X] = IMU_DEV.Gyro[X];
+    INS.Gyro[Y] = IMU_DEV.Gyro[Y];
+    INS.Gyro[Z] = IMU_DEV.Gyro[Z];
 
     // 修正安装误差
     IMU_Param_Correction(&IMU_Param, INS.Gyro, INS.Accel);

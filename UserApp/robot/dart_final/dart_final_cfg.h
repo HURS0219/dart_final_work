@@ -17,7 +17,8 @@
 #define DART_FINAL_CFG_H
 
 /* IMU 使能: H743 板(本次调试板)无 BMI088 → 关闭(否则 INS_Init 里 BMI088Init 死等);
- * 其余板(F407/GIMBAL 等)默认开启。 */
+ * DART_F405_BOARD(实板) IMU 为 ICM-42688(SPI2) → 开启(ins_task 走 ICM 后端);
+ * 其余板(F407/GIMBAL 等)默认开启(BMI088)。 */
 #if defined(STM32H743xx)
 #define DART_IMU_ENABLE 0
 #else
@@ -94,16 +95,28 @@
 /* 上电默认是否使能: 1=上电即 ARMED(当前); 0=需外部使能(赛事规则定后改)。 */
 #define DART_ENABLE_ON_BOOT 1
 
-/* ===================== 通信端口(引脚待定, 先占位) =====================
- * 填对应 CubeMX 句柄即可; 确定为哪个 USART/SPI 后替换。宏是“惰性”的, 不用到不受影响。
- *   ESP32 : 沿用 dart_servo_v0.2 的 USART6
- *   OpenMV: 另一路 USART + 并行 SPI(防丢帧)
- *   VOFA  : 预留(本次只用 RTT)
+/* ===================== 通信端口(按板级选) =====================
+ * 引脚网表见 dart_final/HARDWARE.md。宏是“惰性”的, 不用到不受影响。
+ *   GIMBAL_BOARD(F407 C 板): ESP=huart6, OpenMV=huart3, OpenMV SPI=hspi2
+ *   H743_BOARD             : ESP=huart5, OpenMV=huart7, OpenMV SPI=hspi2
+ *   DART_F405_BOARD(实板)   : ESP=huart1; 视觉 SPI1(从)=hspi1 + USART2=huart2; IMU=ICM@hspi2
  */
-#define DART_USART_ESP32 (&huart5) /* H743: 预留串口(原 huart6 不存在) */
+#if defined(DART_F405_BOARD)
+#define DART_USART_ESP32 (&huart1)   /* 实板: F405 USART1 -> ESP */
+#define DART_USART_OPENMV (&huart2)  /* 实板: F405 USART2 <-> H743 视觉(辅助) */
+#define DART_SPI_OPENMV (&hspi1)     /* 实板: F405 SPI1(PA4-7, 从) <-> H743 HSPI3(主) */
+#define DART_USART_VOFA (&huart6)    /* 预留 */
+#elif defined(STM32H743xx)
+#define DART_USART_ESP32 (&huart5)   /* H743 开发板: 预留(原 huart6 不存在) */
 #define DART_USART_OPENMV (&huart7)
-#define DART_SPI_OPENMV (&hspi2)  /* BMI088 占 hspi1, 故 OpenMV 用 hspi2 */
-#define DART_USART_VOFA (&huart1) /* 预留 */
+#define DART_SPI_OPENMV (&hspi2)     /* BMI088 占 hspi1, 故 OpenMV 用 hspi2 */
+#define DART_USART_VOFA (&huart1)    /* 预留 */
+#else
+#define DART_USART_ESP32 (&huart6)   /* GIMBAL(F407): 沿用 dart_servo_v0.2 */
+#define DART_USART_OPENMV (&huart3)
+#define DART_SPI_OPENMV (&hspi2)
+#define DART_USART_VOFA (&huart1)    /* 预留 */
+#endif
 
 /* OpenMV 7 字节帧参数 (AA 55 X_hi X_lo Y_hi Y_lo CRC8) */
 #define OPENMV_RECV_SIZE 7

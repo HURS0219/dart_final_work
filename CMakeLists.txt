@@ -82,6 +82,13 @@ file(GLOB_RECURSE BASE_SOURCES
         "Modules/*.c"
         "UserApp/os_task.c"
 )
+# 可选: 板级裁剪 (board cmake 里 set(BOARD_EXCLUDE ...) 填入路径片段正则)
+if (DEFINED BOARD_EXCLUDE)
+    foreach (_pat ${BOARD_EXCLUDE})
+        list(FILTER BASE_SOURCES EXCLUDE REGEX "${_pat}")
+    endforeach ()
+    message(STATUS "BOARD_EXCLUDE applied (${MCU_TYPE})")
+endif ()
 list(APPEND SOURCES ${BASE_SOURCES})
 
 # Build types

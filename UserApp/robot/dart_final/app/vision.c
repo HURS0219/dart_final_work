@@ -20,6 +20,9 @@
 #include "message_center.h"
 #include "robot_def.h"
 #include "usart.h"  /* DART_USART_OPENMV(&huart3) 声明处 */
+#if defined(DART_F405_BOARD)
+#include "spi.h" /* hspi1: 视觉 SPI1 从机 (H7 主) */
+#endif
 
 #define OPENMV_HEAD1 0xAA
 #define OPENMV_HEAD2 0x55
@@ -32,6 +35,34 @@ static Dart_Target_s s_rx;                  /* 中断里填入的原始解码结
 static Dart_Target_s s_tgt;                 /* 对外发布的最新目标 */
 static uint32_t s_last_frame_ms = 0;        /* 最近一次有效帧时刻 */
 static Dart_AppStatus_s s_st;
+
+#if defined(DART_F405_BOARD)
+static uint8_t s_spi_buf[OPENMV_RECV_SIZE]; /* SPI1 从机接收缓冲 */
+
+/** @brief 启动 SPI1 从机接收 (软件 NSS: SSI=0 使从机常被选中) */
+static void VisionSpiInit(void) {
+  hspi1.Instance->CR1 &= ~SPI_CR1_SSI;
+  (void)HAL_SPI_Receive_IT(&hspi1, s_spi_buf, OPENMV_RECV_SIZE);
+}
+
+/** @brief 轮询 SPI1 从机: 一帧收完则校验解码并重新武装 (与 USART2 同一 7 字节帧) */
+static void VisionSpiPoll(void) {
+  HAL_SPI_StateTypeDef st = HAL_SPI_GetState(&hspi1);
+  if (st == HAL_SPI_STATE_READY) {
+    uint8_t *b = s_spi_buf;
+    if (b[0] == OPENMV_HEAD1 && b[1] == OPENMV_HEAD2 && crc_8(b, 6) == b[6]) {
+      s_rx.x = (int16_t)((b[2] << 8) | b[3]);
+      s_rx.y = (int16_t)((b[4] << 8) | b[5]);
+      s_rx.found = !(s_rx.x == 0 && s_rx.y == 0);
+      s_new_frame = 1;
+    }
+    (void)HAL_SPI_Receive_IT(&hspi1, s_spi_buf, OPENMV_RECV_SIZE); /* 重新武装 */
+  } else if (st == HAL_SPI_STATE_ERROR || st == HAL_SPI_STATE_ABORT) {
+    (void)HAL_SPI_Abort(&hspi1);
+    (void)HAL_SPI_Receive_IT(&hspi1, s_spi_buf, OPENMV_RECV_SIZE);
+  }
+}
+#endif
 
 /** @brief 串口接收完成回调(中断上下文): 校验并解码一帧 */
 static void Vision_RxCallback(void) {
@@ -61,10 +92,19 @@ void Vision_Init(void) {
   s_pub = PubRegister(TOPIC_TARGET, sizeof(Dart_Target_s));
 
   LOGINFO("[vision] usart reg %s", (s_usart != NULL) ? "OK" : "FAIL");
+
+#if defined(DART_F405_BOARD)
+  VisionSpiInit();
+  LOGINFO("[vision] SPI1 slave armed (7B frame)");
+#endif
 }
 
 void Vision_Task(void) {
   uint32_t now = (uint32_t)DWT_GetTimeline_ms();
+
+#if defined(DART_F405_BOARD)
+  VisionSpiPoll(); /* 双链路: SPI1(从机) 与 USART2 并用, 谁先解出整帧谁更新 */
+#endif
 
   if (s_new_frame) {
     s_new_frame = 0;

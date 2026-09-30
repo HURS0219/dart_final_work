@@ -43,7 +43,9 @@
  * 默认: C 板(F407)=TIM1 (PWM1~4 = TIM1_CH1~CH4 = PE9/PE11/PE13/PE14);
  *       H7/H743 = TIM3 (默认占位, 现场按板子改, 预留接口)。
  */
-#if defined(STM32H723xx) || defined(STM32H743xx)
+#if defined(DART_F405_BOARD)
+#define SERVO_MIX_TIM (&htim4) /* dart real board: TIM4 CH1-4 = PB6/PB7/PB8/PB9 */
+#elif defined(STM32H723xx) || defined(STM32H743xx)
 #define SERVO_MIX_TIM (&htim3) /* H743/H7: 默认, 留接口以后改 */
 #else
 #define SERVO_MIX_TIM (&htim1)

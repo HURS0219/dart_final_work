@@ -14,7 +14,7 @@
 # =====================================================================
 param(
     [Parameter(Mandatory = $true)][string]$Robot,
-    [ValidateSet("GIMBAL_BOARD", "CHASSIS_BOARD", "ONE_BOARD", "H743_BOARD")][string]$Board = "GIMBAL_BOARD",
+    [ValidateSet("GIMBAL_BOARD", "CHASSIS_BOARD", "ONE_BOARD", "H743_BOARD", "DART_F405_BOARD")][string]$Board = "GIMBAL_BOARD",
     [ValidateSet("Debug", "Release", "RelWithDebInfo", "MinSizeRel")][string]$Build = "Debug",
     [switch]$Clean
 )
@@ -36,6 +36,7 @@ switch ($Board) {
     "CHASSIS_BOARD" { $Mcu = "stm32-h7" }
     "ONE_BOARD"     { $Mcu = "stm32-f4" }
     "H743_BOARD"    { $Mcu = "stm32-h743" }
+    "DART_F405_BOARD" { $Mcu = "stm32-f405-dart" }
     default         { $Mcu = "stm32-f4" }
 }
 

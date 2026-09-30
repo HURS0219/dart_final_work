@@ -13,7 +13,7 @@
  */
 //
 void BSPInit() {
-#ifdef STM32F407xx
+#if defined(STM32F407xx) || defined(STM32F405xx)
   DWT_Init(168);
 #elifdef STM32H7
   DWT_Init(480);

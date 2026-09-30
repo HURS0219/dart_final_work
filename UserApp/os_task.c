@@ -68,7 +68,9 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument) {
   LOGINFO("[freeRTOS] MOTOR Task Start");
   for (;;) {
     motor_start = DWT_GetTimeline_ms();
+#if !defined(DART_F405_BOARD)
     MotorControlTask();
+#endif
     motor_dt = DWT_GetTimeline_ms() - motor_start;
     if (motor_dt > 2) LOGERROR("[freeRTOS] MOTOR Task is being DELAY! dt = [%f]", &motor_dt);
     osDelay(2);
@@ -78,13 +80,17 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument) {
 __attribute__((noreturn)) void StartDAEMONTASK(void const *argument) {
   static float daemon_dt;
   static float daemon_start;
+#if !defined(DART_F405_BOARD)
   BuzzerInit();
+#endif
   LOGINFO("[freeRTOS] Daemon Task Start");
   for (;;) {
     // 100Hz
     daemon_start = DWT_GetTimeline_ms();
     DaemonTask();
+#if !defined(DART_F405_BOARD)
     BuzzerTask();
+#endif
     daemon_dt = DWT_GetTimeline_ms() - daemon_start;
     if (daemon_dt > 10) LOGERROR("[freeRTOS] Daemon Task is being DELAY! dt = [%f]", &daemon_dt);
     osDelay(10);
@@ -95,7 +101,9 @@ __attribute__((noreturn)) void StartROBOTTASK(void const *argument) {
   static float robot_dt;
   static float robot_start;
   RobotInit();
+#if !defined(DART_F405_BOARD)
   DMMotorTaskInit();
+#endif
   LOGINFO("[freeRTOS] ROBOT core Task Start");
   // 200Hz-500Hz,若有额外的控制任务如平衡步兵可能需要提升至1kHz
   for (;;) {
