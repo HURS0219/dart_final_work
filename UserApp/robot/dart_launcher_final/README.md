@@ -239,16 +239,28 @@ F,<n>,
 > - 电机第 10 项：`turns100`（圈×100）→ `deg100`（角度×100）
 > - 任务第 1 项：`spring100`（圈×100）→ `spring_a_deg`（A 拉簧预备位角度）
 
-### 前端需要同步修改的地方
+### 前端已同步（v1.0.7 完成）
+
+`esp32/` 与 `pc_vision/` 已随本 app 一并提供（从旧版 `dart_launcher_web_v5_HIK` 移植并按新协议改好）：
 
 | 文件 | 改动 |
 |---|---|
-| `esp32/task.py` | `set_turns()` → 发 `N,<slot>,<deg>` |
-| `esp32/www/js/motor.js` | "圈"控件改"°"；`turns100` → `deg100` |
-| `esp32/www/js/app.js` | `turns100`/`spring100` 显示单位改 `°` |
-| `esp32/www/js/task.js` | 上膛圈数 → 角度 |
+| `esp32/proto.py` | 解析增加 `deg100`/`spring_a_deg`（保留旧键名做别名）；字段顺序未变 |
+| `esp32/motor.py` | 新增 `set_angle()`（发 `N,slot,deg`）与 `deg100` 读取；去掉 `MODE_TURNS` 引用 |
+| `esp32/task.py` | ⭐ **核心修复**：`set_turns()` 改发 `N,<slot>,<deg>`（旧 `W` 会被固件拒绝）；新增 `set_spring_deg_ab()` 供两簧独立设定 |
+| `esp32/web.py` | `op=turns` → `op=springdeg`（可带 `slot`）/ `op=screwdeg`；电机 `op=turns` → `op=deg` |
+| `esp32/main.py` | 电机 4 路 → **3 路**（yaw 独立成 app）；调试行不再索引 `motors[3]` |
+| `www/js/app.js` | 电机卡 3 张；解析 `deg100`；`yawCard` 传 `slot=-1` 且不再索引 `motors[3]` |
+| `www/js/motor.js` | "圈数"模式 → "直接角度"；显示单位改 `度`；下发 `op=deg` / `op=springdeg` |
+| `www/js/task.js` | 拉簧**A/B 分开**输入角度；距离表第二列改角度；localStorage 键改 `dartDistDeg` |
+| `www/js/yaw.js` | `slot=-1` 时不发 `/api/motor`；`update()` 容忍 `m=null`，仍更新视觉/模式段 |
 
-> 在改完前端前，网页的"上膛"按钮会失效（旧 `W` 被拒绝），此时可用串口手动发 `N,0,1800` / `N,1,1980`。
+**已验证**：6 个 Python + 5 个 JS 全部语法检查通过；用固件真实遥测格式做了端到端解析验证
+（`n=3`、`deg100=180000`→1800°、`spring_a_deg` 对齐、参数段 3 路）。
+
+> **`SAVE` 命令**：本工程是纯 cfg（无 Flash），固件收到 `SAVE` 会**回 `SAVED` 但不持久化**，
+> 同时打一条 `LOGWARNING` 提醒。网页"保存"按钮因此不会静默骗人，但**真正持久化仍需改
+> `launcher_cfg.h` 再烧录**。
 
 ---
 
@@ -285,12 +297,14 @@ powershell -ExecutionPolicy Bypass -File make_one\build.ps1 -Robot dart_launcher
 ## 10. 待办 / 已知问题
 
 - [ ] **丝杆实测参数**：`LAUNCH_SC_RATIO` / `LAUNCH_SC_DEG_PREP` / `LAUNCH_SC_REVERSE` 须按实机填写（当前为占位值）。
-- [ ] **前端同步**：`esp32/` 的 `task.py` 与 `www/js/*.js` 需改 `W`→`N`、圈→角度。
+- [x] ~~**前端同步**~~：已完成（`esp32/` 与 `pc_vision/` 已随本 app 提供并改好协议）。
 - [ ] **"顶不住"判据**：当前检测不出"保持时缓慢失守"（`PID_ErrorHandle` 用相对误差 >95% 判定堵转，保持场景误差≈0 永不触发）。建议补"电流饱和 + 位置持续后退"的判据。
 - [ ] **掉线盲发保持电流**：目前只是"尽力而为"，且无超时保护。
 - [ ] **机械兜底**：无棘轮/自锁，建议评估加装缓冲或阻尼。
 - [ ] 丝杆是否需要在时序中做"退壳/复位"动作（当前完全不参与）。
 - [ ] `app/cmd` 与 `app/fsm` 同时写 `motor_cmd`：目前靠"后者覆盖"，建议明确仲裁（如加 `from_fsm` 优先级）。
+- [ ] **网页 PID 面板对 yaw 失效**：yaw 独立成 app 后不在 `motor_fb` 里，其参数需另开通道（当前面板对 yaw 只读不写）。
+- [ ] **台架实测**：需接电机/舵机后验证 CAN 通信、拉簧保持电流、舵机标定、丝杆行程。
 
 ---
 

@@ -99,6 +99,15 @@ static void ProcessOne(char *buf) {
     s_last_rx_ms = (uint32_t)DWT_GetTimeline_ms(); /* 心跳: 仅刷新活性 */
     return;
   }
+  if (strncmp(buf, "SAVE", 4) == 0) {
+    /* SAVE: 本工程已改为"纯 cfg"(不用 Flash, 见 launcher_cfg.h 说明)。
+     * 为兼容旧网页的"保存"按钮, 这里回 SAVED 但不做任何持久化 ——
+     * 真正的持久化请把值写回 launcher_cfg.h 再烧录。
+     * 不静默忽略: 否则网页会以为保存成功却不知情。 */
+    LOGWARNING("[link] SAVE ignored (pure-cfg build; edit launcher_cfg.h instead)");
+    Reply("SAVED\n");
+    return;
+  }
   if (buf[0] == 'S' && buf[1] == '\0') {
     /* 扫描在线电机: 由 motor_fb 的 online 位汇总 */
     char out[64];
