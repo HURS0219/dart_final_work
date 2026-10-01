@@ -136,7 +136,13 @@
  * ==========================================================================*/
 #define LAUNCH_YAW_ID 1
 #define LAUNCH_YAW_RATIO 36.0f /* M2006 减速比 */
-#define LAUNCH_YAW_REVERSE MOTOR_DIRECTION_NORMAL
+/*
+ * 方向: **实测确认需反置**(台架验证)。
+ *   现象: 目标在画面右侧(像素误差 +180)时 yaw 往左转, 两个方向都反 -> 必须取反。
+ *   反向同时影响反馈符号(库对 total_angle/speed_aps 取负)与 CAN 发送值;
+ *   改后需重新取零(零点定义随方向变化)。
+ */
+#define LAUNCH_YAW_REVERSE MOTOR_DIRECTION_REVERSE
 #define LAUNCH_YAW_TOL_DEG 5
 
 /* Yaw 速度环 PID(自瞄/手动都是用速度环跟踪) */

@@ -23,10 +23,13 @@
 /* ================= CAN / 电机 ID ================= */
 #define DART_CAN_HANDLE (&hcan1)
 
+/* 【ID 对齐实机】2026-10-01 按 dart_launcher_final 的实机接线调整:
+ *   拉簧B 与 丝杆(原"扳机")的 ID 对调 —— 实机上拉簧B=ID4, 丝杆=ID3。
+ *   两版必须一致, 否则状态机驱动的对象会搞错。 */
 #define DART_SPRING_A_ID 2
-#define DART_SPRING_B_ID 3
-#define DART_TRIGGER_ID  4
-#define DART_YAW_ID      1
+#define DART_SPRING_B_ID 4 /* 实机: 拉簧B = ID4 */
+#define DART_TRIGGER_ID 3  /* 实机: 丝杆   = ID3 */
+#define DART_YAW_ID 1
 
 #define DART_M3508_GEAR_RATIO 19.2032f
 #define DART_M2006_GEAR_RATIO 36.0f

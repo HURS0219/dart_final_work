@@ -181,6 +181,13 @@ static void SysTelemetry(float dt_ms) {
           (unsigned)Motor_GetStatus()->hb, (unsigned)Trigger_GetStatus()->hb,
           (unsigned)Vision_GetStatus()->hb, (unsigned)Yaw_GetStatus()->hb);
 
+  /* 机构关键量: 无网页时靠这条在 RTT 观察机构状态(角度为输出侧 deg) */
+  LOGINFO("[lch] A deg=%d tgt=%d on=%d at=%d hold=%d rpm=%d | B deg=%d tgt=%d on=%d at=%d | SC deg=%d on=%d",
+          (int)MotorFbAngle(0), (int)MotorFbTarget(0), (int)MotorFbOnline(0),
+          (int)MotorFbAtTarget(0), (int)MotorFbHolding(0), (int)MotorFbRpm(0),
+          (int)MotorFbAngle(1), (int)MotorFbTarget(1), (int)MotorFbOnline(1),
+          (int)MotorFbAtTarget(1), (int)MotorFbAngle(2), (int)MotorFbOnline(2));
+
   Dart_Vofa_Push();
 }
 

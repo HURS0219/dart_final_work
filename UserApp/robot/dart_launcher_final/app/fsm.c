@@ -38,6 +38,12 @@ static uint8_t s_step = LAUNCH_TASK_IDLE;
 static uint32_t s_step_t0 = 0;
 static uint8_t s_active = 0; /* 1=流程进行中 */
 
+/* 上一帧的边沿检测状态(见 Fsm_Task 中 spring_go 的说明) */
+static uint8_t s_prev_start = 0;
+static uint8_t s_prev_stop = 0;
+static uint8_t s_prev_spring_go = 0;
+static uint8_t s_prev_servo_go = LAUNCH_SERVO_STD;
+
 /* 最近一次反馈 */
 static Launcher_MotorFb_s s_mf;
 static Launcher_ServoFb_s s_sf;
@@ -128,23 +134,30 @@ void Fsm_Task(void) {
     if (fc.estop_clr) {
       s_step = LAUNCH_TASK_IDLE;
     }
-    /* 启动/停止 */
-    if (fc.start && !s_active) {
+    /* 启动/停止(边沿: 只在收到跳变时动作) */
+    if (fc.start && !s_prev_start && !s_active) {
       s_active = 1;
       s_step = LAUNCH_TASK_SERVO_STD1;
       s_step_t0 = now;
     }
-    if (fc.stop) {
+    if (fc.stop && !s_prev_stop) {
       s_active = 0;
       s_step = LAUNCH_TASK_IDLE;
     }
-    /* 单步(手动): 直接给拉簧或舵机一个动作, 不进自动流程 */
-    if (!s_active && fc.spring_go) {
+    /* 单步(手动): spring_go 是"边沿触发"请求 —— 只在 0->1 / 1->0 跳变时执行一次。
+     * 【曾经的问题】若按电平判断(fc.spring_go 直接当条件), 由于 cmd.c 每周期都发布
+     *   一帧 fsm_cmd(未设置时该字段为 0), 该分支会被反复触发, 进而每周期都发布
+     *   motor_cmd 覆盖掉 app/cmd 设定的目标, 表现为"N/M 命令发了但电机不动"。
+     *   用边沿判定即可避免与 cmd 抢写。 */
+    if (!s_active && fc.spring_go == 1 && s_prev_spring_go == 0) {
       PublishSpring(LAUNCH_STEP_SPRING_PREP_A_DEG, LAUNCH_STEP_SPRING_PREP_B_DEG);
-    } else if (!s_active && fc.spring_go == 0 && fc.servo_go == LAUNCH_SERVO_STD &&
-               (fc.start || fc.stop)) {
-      /* 占位: 无操作 */
+    } else if (!s_active && fc.spring_go == 0 && s_prev_spring_go == 1) {
+      PublishSpring(LAUNCH_STEP_SPRING_STD1_A_DEG, LAUNCH_STEP_SPRING_STD1_B_DEG);
     }
+    s_prev_start = fc.start;
+    s_prev_stop = fc.stop;
+    s_prev_spring_go = fc.spring_go;
+    s_prev_servo_go = fc.servo_go;
   }
 
   /* ---- 推进 ---- */

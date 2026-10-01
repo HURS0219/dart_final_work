@@ -587,3 +587,32 @@ void Motor_Task(void) {
 }
 
 const Launcher_AppStatus_s *Motor_GetStatus(void) { return &s_st; }
+
+/* ====================== 只读观测接口(供 RTT 遥测) ======================
+ * 说明: 仅从 motor_fb 快照取字段, 便于 SWD 调试时在 RTT 看到机构状态
+ *       (本工程无网页可用时)。刻意不含任何控制接口, 不构成 app 间控制耦合。
+ * slot 越界返回 0。 */
+float MotorFbAngle(int slot) {
+  if (slot < 0 || slot >= LAUNCH_M_COUNT) return 0.0f;
+  return s_fb.angle_deg[slot];
+}
+float MotorFbTarget(int slot) {
+  if (slot < 0 || slot >= LAUNCH_M_COUNT) return 0.0f;
+  return s_fb.target[slot];
+}
+float MotorFbRpm(int slot) {
+  if (slot < 0 || slot >= LAUNCH_M_COUNT) return 0.0f;
+  return s_fb.rpm[slot];
+}
+uint8_t MotorFbOnline(int slot) {
+  if (slot < 0 || slot >= LAUNCH_M_COUNT) return 0;
+  return s_fb.online[slot];
+}
+uint8_t MotorFbAtTarget(int slot) {
+  if (slot < 0 || slot >= LAUNCH_M_COUNT) return 0;
+  return s_fb.at_target[slot];
+}
+uint8_t MotorFbHolding(int slot) {
+  if (slot < 0 || slot >= LAUNCH_M_COUNT) return 0;
+  return s_fb.holding[slot];
+}

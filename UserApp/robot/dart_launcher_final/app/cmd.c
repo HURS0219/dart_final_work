@@ -35,6 +35,7 @@ static Publisher_t *s_pub_vcmd = NULL;
 
 /* ---- 状态 ---- */
 static uint8_t s_estop = 0;
+static uint8_t s_estop_clr_cnt = 0; /* >0 时连续发 estop_clr(防单周期脉冲丢失) */
 static uint8_t s_yaw_mode = LAUNCH_YAW_MANUAL;
 static float s_aim_rpm = LAUNCH_YAW_AIM_RPM;
 static uint32_t s_last_cmd_ms = 0;
@@ -52,6 +53,14 @@ static uint8_t s_sv_state = LAUNCH_SERVO_STD;
 /* 时序反馈镜像 */
 static uint8_t s_task_step = LAUNCH_TASK_IDLE;
 
+/* 逐路"保持型"电机目标。
+ * 【为什么需要】若 Cmd_Task 每周期都把 mcmd 重置为 STOP, 那么 N/M 命令设定的
+ *   目标只生效一个周期, 下一周期就被本函数覆盖成 STOP —— 表现为
+ *   "命令发了但电机不动"。故用 s_hold_* 记住"当前应保持的逐路目标",
+ *   每周期整帧发出, 只在收到新指令时才更新。上电默认全部 STOP。 */
+static uint8_t s_hold_mode[LAUNCH_M_COUNT];
+static float s_hold_target[LAUNCH_M_COUNT];
+
 static Launcher_AppStatus_s s_st;
 static Launcher_State_s s_state;
 
@@ -60,6 +69,7 @@ void Cmd_Init(void) {
   memset(&s_state, 0, sizeof(s_state));
 
   s_estop = 0;
+  s_estop_clr_cnt = 0;
   s_yaw_mode = LAUNCH_YAW_MANUAL;
   s_aim_rpm = LAUNCH_YAW_AIM_RPM;
   s_last_cmd_ms = 0;
@@ -70,6 +80,12 @@ void Cmd_Init(void) {
   s_sv_prep = LAUNCH_SV_DEG_PREP;
   s_sv_state = LAUNCH_SERVO_STD;
   s_task_step = LAUNCH_TASK_IDLE;
+
+  /* 逐路目标上电默认 STOP(不驱动); 之后由 N/M/G 命令接管 */
+  for (int i = 0; i < LAUNCH_M_COUNT; i++) {
+    s_hold_mode[i] = LAUNCH_MODE_STOP;
+    s_hold_target[i] = 0.0f;
+  }
 
   s_sub_cmd = SubRegister(TOPIC_LAUNCH_CMD, sizeof(Launcher_Cmd_s));
   s_sub_mf = SubRegister(TOPIC_MOTOR_FB, sizeof(Launcher_MotorFb_s));
@@ -120,8 +136,15 @@ void Cmd_Task(void) {
   memset(&fcmd, 0, sizeof(fcmd));
   memset(&vcmd, 0, sizeof(vcmd));
 
-  /* 默认: 全部停止(无指令时不驱动) */
-  for (int i = 0; i < LAUNCH_M_COUNT; i++) mcmd.mode[i] = LAUNCH_MODE_STOP;
+  /* 【重要】电机目标必须"保持型", 不能每周期重置为 STOP。
+   * 原因: 若这里每次都填 STOP, 那么 N/M 命令设定的目标只生效一个周期, 下一周期
+   *       就被本函数覆盖成 STOP, 表现为"命令发了但电机不动"。
+   * 做法: 用 s_hold_* 记录"当前应保持的逐路目标", 每周期把它整帧发出;
+   *       只有收到新指令时才更新它。 */
+  for (int i = 0; i < LAUNCH_M_COUNT; i++) {
+    mcmd.mode[i] = s_hold_mode[i];
+    mcmd.target[i] = s_hold_target[i];
+  }
 
   /* ---- 取反馈 ---- */
   {
@@ -150,15 +173,15 @@ void Cmd_Task(void) {
     /* ---- 逐路目标 ---- */
     /* M,slot,mode,value : 直接设定(角度模式下 value 为输出侧 deg) */
     if (c.set_motor && c.motor_slot >= 0 && c.motor_slot < LAUNCH_M_COUNT) {
-      mcmd.mode[(int)c.motor_slot] = c.motor_mode;
-      mcmd.target[(int)c.motor_slot] = c.motor_target;
+      s_hold_mode[(int)c.motor_slot] = c.motor_mode;
+      s_hold_target[(int)c.motor_slot] = c.motor_target;
     }
 
     /* N,slot,deg : 设某路目标角度(取代旧 W) */
     if (c.set_angle && c.angle_slot >= 0 && c.angle_slot < LAUNCH_M_COUNT) {
       int slot = c.angle_slot;
-      mcmd.mode[slot] = LAUNCH_MODE_ANGLE;
-      mcmd.target[slot] = (float)c.angle_deg;
+      s_hold_mode[slot] = LAUNCH_MODE_ANGLE;
+      s_hold_target[slot] = (float)c.angle_deg;
       /* 同步更新"预备位"记忆, 便于 N 之后状态机沿用 */
       if (slot == LAUNCH_M_SPRING_A) s_prep_a = c.angle_deg;
       if (slot == LAUNCH_M_SPRING_B) s_prep_b = c.angle_deg;
@@ -198,21 +221,29 @@ void Cmd_Task(void) {
         c.fsm_op == LAUNCH_FSM_OP_SPRING_ZERO || c.fsm_op == LAUNCH_FSM_OP_SPRING_PREP ||
         c.fsm_op == LAUNCH_FSM_OP_SERVO_STD || c.fsm_op == LAUNCH_FSM_OP_SERVO_PREP) {
       switch (c.fsm_op) {
-        case LAUNCH_FSM_OP_ESTOP_ON: s_estop = 1; break;
-        case LAUNCH_FSM_OP_ESTOP_OFF: s_estop = 0; fcmd.estop_clr = 1; mcmd.estop_clr = 1; break;
+        case LAUNCH_FSM_OP_ESTOP_ON:
+          s_estop = 1;
+          s_estop_clr_cnt = 0;
+          break;
+        case LAUNCH_FSM_OP_ESTOP_OFF:
+          s_estop = 0;
+          /* estop_clr 是单周期脉冲, 而 message_center 队列深度仅 1, 有被后续帧
+           * 覆盖而丢失的风险(会导致急停解不掉) -> 连续发若干帧确保 motor 侧收到。 */
+          s_estop_clr_cnt = 20;
+          break;
         case LAUNCH_FSM_OP_AUTO_START: fcmd.start = 1; break;
         case LAUNCH_FSM_OP_AUTO_STOP: fcmd.stop = 1; break;
         case LAUNCH_FSM_OP_SPRING_ZERO:
-          mcmd.mode[LAUNCH_M_SPRING_A] = LAUNCH_MODE_ANGLE;
-          mcmd.target[LAUNCH_M_SPRING_A] = (float)LAUNCH_SA_DEG_ZERO;
-          mcmd.mode[LAUNCH_M_SPRING_B] = LAUNCH_MODE_ANGLE;
-          mcmd.target[LAUNCH_M_SPRING_B] = (float)LAUNCH_SB_DEG_ZERO;
+          s_hold_mode[LAUNCH_M_SPRING_A] = LAUNCH_MODE_ANGLE;
+          s_hold_target[LAUNCH_M_SPRING_A] = (float)LAUNCH_SA_DEG_ZERO;
+          s_hold_mode[LAUNCH_M_SPRING_B] = LAUNCH_MODE_ANGLE;
+          s_hold_target[LAUNCH_M_SPRING_B] = (float)LAUNCH_SB_DEG_ZERO;
           break;
         case LAUNCH_FSM_OP_SPRING_PREP:
-          mcmd.mode[LAUNCH_M_SPRING_A] = LAUNCH_MODE_ANGLE;
-          mcmd.target[LAUNCH_M_SPRING_A] = (float)s_prep_a;
-          mcmd.mode[LAUNCH_M_SPRING_B] = LAUNCH_MODE_ANGLE;
-          mcmd.target[LAUNCH_M_SPRING_B] = (float)s_prep_b;
+          s_hold_mode[LAUNCH_M_SPRING_A] = LAUNCH_MODE_ANGLE;
+          s_hold_target[LAUNCH_M_SPRING_A] = (float)s_prep_a;
+          s_hold_mode[LAUNCH_M_SPRING_B] = LAUNCH_MODE_ANGLE;
+          s_hold_target[LAUNCH_M_SPRING_B] = (float)s_prep_b;
           break;
         case LAUNCH_FSM_OP_SERVO_STD: s_sv_state = LAUNCH_SERVO_STD; break;
         case LAUNCH_FSM_OP_SERVO_PREP: s_sv_state = LAUNCH_SERVO_PREP; break;
@@ -240,6 +271,13 @@ void Cmd_Task(void) {
     ycmd.estop = 1;
     /* 急停时不要再下发运动目标, 否则会与保持策略打架 */
     for (int i = 0; i < LAUNCH_M_COUNT; i++) mcmd.mode[i] = LAUNCH_MODE_STOP;
+  }
+
+  /* 解除急停: 连续若干帧重复发送, 防止单周期脉冲被队列覆盖丢失 */
+  if (s_estop_clr_cnt > 0) {
+    s_estop_clr_cnt--;
+    mcmd.estop_clr = 1;
+    fcmd.estop_clr = 1;
   }
 
   /* ---- 舵机 ---- */

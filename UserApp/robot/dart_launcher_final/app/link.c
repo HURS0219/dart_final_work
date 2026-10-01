@@ -28,6 +28,7 @@
 #include "bsp_dwt.h"
 #include "bsp_log.h"
 #include "bsp_usart.h"
+#include "SEGGER_RTT.h" /* RTT 命令控制台(下行通道 0) */
 #include "launcher_cfg.h"
 #include "message_center.h"
 #include "usart.h" /* LAUNCH_LINK_UART 展开为 &huart6 */
@@ -226,13 +227,11 @@ static void ProcessOne(char *buf) {
 }
 
 /**
- * @brief 串口接收完成回调(中断上下文): 按行切分并逐条解析
- * @note  bsp_usart 会在回调返回后清空 recv_buff(见 bsp_usart.c), 故此处只读不依赖。
+ * @brief 把一段(可能含多行)文本按行切分并逐条解析, 结果发布到 launch_cmd
+ * @param buf 以 '\0' 结尾的文本(会被就地修改)
+ * @note  串口回调与 RTT 控制台共用本函数, 保证两条输入路径行为完全一致。
  */
-static void Link_RxCallback(void) {
-  char *buf = (char *)s_usart->recv_buff;
-  s_last_rx_ms = (uint32_t)DWT_GetTimeline_ms();
-
+static void ProcessLines(char *buf) {
   char *p = buf;
   while (*p) {
     char *nl = strchr(p, '\n');
@@ -246,13 +245,67 @@ static void Link_RxCallback(void) {
     if (nl == NULL) break;
     p = nl + 1;
   }
+}
 
-  /* 解析结果立即发布(在中断里发话题: message_center 是纯内存拷贝, 无阻塞) */
+/** @brief 把本周期解析出的指令发布出去(若有) */
+static void PublishIfReady(void) {
   if (s_cmd_ready) {
     s_cmd.tick = (uint32_t)DWT_GetTimeline_ms();
     PubPushMessage(s_pub_cmd, &s_cmd);
     memset(&s_cmd, 0, sizeof(s_cmd));
     s_cmd_ready = 0;
+  }
+}
+
+/**
+ * @brief 串口接收完成回调(中断上下文): 按行切分并逐条解析
+ * @note  bsp_usart 会在回调返回后清空 recv_buff(见 bsp_usart.c), 故此处只读不依赖。
+ */
+static void Link_RxCallback(void) {
+  s_last_rx_ms = (uint32_t)DWT_GetTimeline_ms();
+  ProcessLines((char *)s_usart->recv_buff);
+  /* 解析结果立即发布(在中断里发话题: message_center 是纯内存拷贝, 无阻塞) */
+  PublishIfReady();
+}
+
+/* ============================== RTT 命令控制台 ==============================
+ * 【为什么需要】现场调试常常只有 J-Link/SWD, 没有空闲串口; 而本工程唯一的命令
+ *   入口原本是 USART6。这里把 RTT 的**下行通道(0)** 也接进来, 使 RTT 与 USART6
+ *   共用同一条解析链路:
+ *       文本 -> ProcessLines() -> ProcessOne() -> launch_cmd 话题 -> app/cmd
+ *   于是 N/M/P/R/D/Z/V/G/C/Y/A/H/S/SAVE 等全部命令都能从 SWD 直接发。
+ *
+ * 【为什么放在主循环而不是中断】SEGGER_RTT_Read 不是中断安全的, 且命令频率很低,
+ *   在 Link_Task 里轮询即可(1kHz), 对实时性无影响。
+ *
+ * 【注意】RTT 下行缓冲默认仅 16 字节(SEGGER_RTT_Conf.h 的 BUFFER_SIZE_DOWN),
+ *   故单条命令不要超过约 14 字节(留 \r\n)。
+ * ==========================================================================*/
+static char s_rtt_line[64];
+static uint8_t s_rtt_len = 0;
+
+static void RttConsolePoll(void) {
+  char buf[32];
+  unsigned n;
+  unsigned i;
+
+  if (!SEGGER_RTT_HasData(0)) return;
+  n = SEGGER_RTT_Read(0, buf, sizeof(buf));
+  for (i = 0; i < n; i++) {
+    char c = buf[i];
+    if (c == '\r' || c == '\n') {
+      if (s_rtt_len > 0) {
+        s_rtt_line[s_rtt_len] = '\0';
+        /* 复用同一条解析链路 */
+        ProcessLines(s_rtt_line);
+        PublishIfReady();
+        s_rtt_len = 0;
+      }
+    } else if (s_rtt_len < sizeof(s_rtt_line) - 1) {
+      s_rtt_line[s_rtt_len++] = c;
+    } else {
+      s_rtt_len = 0; /* 溢出: 丢弃整行, 防止半条命令被误解析 */
+    }
   }
 }
 
@@ -355,6 +408,9 @@ void Link_Task(void) {
     if (SubGetMessage(s_sub_state, &st)) s_state = st;
     if (SubGetMessage(s_sub_vis, &am)) s_aim = am;
   }
+
+  /* ---- RTT 命令控制台(SWD 调试用): 与 USART6 共用解析链路 ---- */
+  RttConsolePoll();
 
   /* ---- 周期发遥测 ---- */
   static uint32_t last_fb = 0;
