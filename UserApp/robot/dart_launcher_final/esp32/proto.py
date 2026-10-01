@@ -19,9 +19,37 @@ MODE_TURNS = 3
 
 PARAM_ORDER = [1, 2, 3, 4, 5, 7, 8, 10, 11, 12, 6]  # 与 C 端一致
 
+# ============================================================================
+#  ESP32-S3-CAM -> C 板(STM32F407) 串口引脚
+# ============================================================================
+#  默认: UART1, TX=GPIO4, RX=GPIO5, 115200 8N1
+#  接线: ESP32 GPIO4 (TX) -> C板 PG9  (USART6_RX)
+#        ESP32 GPIO5 (RX) <- C板 PG14 (USART6_TX)
+#        GND <-> GND
+#
+#  【为什么不用 GPIO17/18】
+#    本板为 ESP32-S3-CAM, GPIO17/18 在板上标注为 CAM_*(摄像头/SD 预留)。
+#    虽然排针引出、不接摄像头时可用, 但换非 CAM 版 S3 就未必引出,
+#    故改用通用 IO(GPIO4/5), 可移植性更好。
+#
+#  【本板绝对不能占用的引脚】
+#    GPIO26~32 : 内部 SPI Flash
+#    GPIO35/36/37 : PSRAM   (板上明确标注)
+#    GPIO19/20 : 原生 USB      (PC<->ESP32 桥走这里, 代码用 sys.stdin)
+#    GPIO0/45/46 : Strapping(启动模式)
+#    GPIO43/44 : U0TXD/U0RXD(调试串口, 若从 UART 口取日志则勿占用)
+#
+#  【PC 侧注意】USB 线必须插板上 "OTG" 口(原生 USB), 桥接才有效;
+#    插 "UART" 口(CH343) 时 sys.stdin 拿不到数据。
+DEFAULT_UART_ID = 1
+DEFAULT_TX_PIN = 4
+DEFAULT_RX_PIN = 5
+DEFAULT_BAUD = 115200
+
 
 class Bus:
-    def __init__(self, uart_id=1, tx=17, rx=18, baud=115200):
+    def __init__(self, uart_id=DEFAULT_UART_ID, tx=DEFAULT_TX_PIN, rx=DEFAULT_RX_PIN,
+                 baud=DEFAULT_BAUD):
         self.uart = UART(uart_id, baudrate=baud, tx=tx, rx=rx, rxbuf=1024)
         self.rxbuf = b""
         self.state = None      # 解析后的遥测

@@ -1,15 +1,23 @@
-# main.py — 制导飞镖发射架 · 网页控制台 (ESP32-S3 / MicroPython)
-#   配套固件: UserApp/robot/dart_launcher_final  (v1.0.7)
+# main.py — 制导飞镖发射架 · 网页控制台 (ESP32-S3-CAM / MicroPython)
+#   配套固件: UserApp/robot/dart_launcher_final  (v1.0.7+)
 #
 # 组装: 总线驱动 Bus + 电机/舵机/任务对象 + HTTP 服务
-# 另外做 USB 串口(PC) <-> UART1(C板) 双向桥:
-#   PC --COM8--> ESP32 --UART1--> C板     (发坐标/指令)
-#   C板 --UART1--> ESP32 --COM8--> PC     (遥测回传, 方便上位机实时调试)
+#
+# ── 接线(务必核对) ────────────────────────────────────────────────
+#   ESP32-S3-CAM              C 板 (STM32F407)
+#     GPIO4  (TX) ──────────> PG9   (USART6_RX)
+#     GPIO5  (RX) <────────── PG14  (USART6_TX)
+#     GND         ──────────  GND
+#     OTG 口      ──────────  PC(USB)   ← 必须插 OTG 口(原生USB)
+#
+#   波特率 115200 8N1(两端一致)。C 板侧为 LAUNCH_LINK_UART = &huart6。
+#
+#   ⚠ USB 必须插板上 "OTG" 口: 本脚本用 sys.stdin 做 PC<->C板 双向桥,
+#     只有原生 USB(GPIO19/20) 才有数据; 插 "UART" 口(CH343) 桥会失效。
+#   ⚠ 勿占用: GPIO26~32(Flash), GPIO35/36/37(PSRAM), GPIO19/20(USB),
+#             GPIO0/45/46(strapping)。GPIO17/18 是 CAM 预留, 本工程不用。
 #
 # 依赖同目录: proto.py motor.py servo.py task.py web.py 以及 www/ 静态文件。
-#
-# 【v1.0.7 变更】电机由 4 路改为 3 路: yaw 已独立成 app, 不再出现在 motor_fb 里。
-#   slot 0=拉簧A(0) 1=拉簧B 2=丝杆; yaw 通过 Y 命令与 task 段的 yaw 字段观察。
 
 import network
 import select
@@ -32,7 +40,8 @@ while not ap.active():
     time.sleep_ms(50)
 print("AP ready:", ap.ifconfig()[0])
 
-bus = Bus()
+# UART1 接 C 板: GPIO4=TX, GPIO5=RX(见文件头接线表; 默认值即为此, 显式写出便于核对)
+bus = Bus(uart_id=1, tx=4, rx=5, baud=115200)
 # slot 必须与固件 Launcher_MotorSlot_e 一致: 0=拉簧A 1=拉簧B 2=丝杆
 # (yaw 已独立成 app, 走 Y 命令 + task.yaw 字段, 不在此列表)
 motors = [
