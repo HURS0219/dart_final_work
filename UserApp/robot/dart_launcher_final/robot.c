@@ -33,7 +33,7 @@
 #include "cmd.h"
 #include "fsm.h"
 #include "link.h"
-#include "motor.h"
+#include "motortest.h"
 #include "trigger.h"
 #include "vision.h"
 #include "yaw.h"
@@ -91,7 +91,7 @@ static void SysMonitor(float dt_ms) {
   st[MON_LINK] = Link_GetStatus();
   st[MON_CMD] = Cmd_GetStatus();
   st[MON_FSM] = Fsm_GetStatus();
-  st[MON_MOTOR] = Motor_GetStatus();
+  st[MON_MOTOR] = Motortest_GetStatus();
   st[MON_TRIGGER] = Trigger_GetStatus();
   st[MON_VISION] = Vision_GetStatus();
   st[MON_YAW] = Yaw_GetStatus();
@@ -178,15 +178,16 @@ static void SysTelemetry(float dt_ms) {
   LOGINFO("[lch] sys=%d fault=0x%04X | hb link=%u cmd=%u fsm=%u mot=%u trg=%u vis=%u yaw=%u",
           (int)s_state, s_fault_bits, (unsigned)Link_GetStatus()->hb,
           (unsigned)Cmd_GetStatus()->hb, (unsigned)Fsm_GetStatus()->hb,
-          (unsigned)Motor_GetStatus()->hb, (unsigned)Trigger_GetStatus()->hb,
+          (unsigned)Motortest_GetStatus()->hb, (unsigned)Trigger_GetStatus()->hb,
           (unsigned)Vision_GetStatus()->hb, (unsigned)Yaw_GetStatus()->hb);
 
   /* 机构关键量: 无网页时靠这条在 RTT 观察机构状态(角度为输出侧 deg) */
-  LOGINFO("[lch] A deg=%d tgt=%d on=%d at=%d hold=%d rpm=%d | B deg=%d tgt=%d on=%d at=%d | SC deg=%d on=%d",
-          (int)MotorFbAngle(0), (int)MotorFbTarget(0), (int)MotorFbOnline(0),
-          (int)MotorFbAtTarget(0), (int)MotorFbHolding(0), (int)MotorFbRpm(0),
-          (int)MotorFbAngle(1), (int)MotorFbTarget(1), (int)MotorFbOnline(1),
-          (int)MotorFbAtTarget(1), (int)MotorFbAngle(2), (int)MotorFbOnline(2));
+  LOGINFO("[lch] A deg=%d tgt=%d on=%d at=%d | B deg=%d tgt=%d on=%d at=%d | SC deg=%d on=%d",
+          (int)Motortest_GetAngle(0), (int)0, (int)Motortest_IsOnline(0),
+          (int)Motortest_AtTarget(0),
+          (int)Motortest_GetAngle(1), (int)0, (int)Motortest_IsOnline(1),
+          (int)Motortest_AtTarget(1), (int)Motortest_GetAngle(2),
+          (int)Motortest_IsOnline(2));
 
   Dart_Vofa_Push();
 }
@@ -198,13 +199,19 @@ void RobotInit(void) {
   /* 顺序说明:
    *   先建"机构"app(它们注册话题并初始化硬件), 再建"逻辑"app(它们订阅话题)。
    *   message_center 允许订阅者晚于发布者注册, 但按此顺序更直观。 */
-  Motor_Init();   /* 4 路 CAN 电机(含丝杆) */
-  Trigger_Init(); /* PWM 舵机 */
-  Yaw_Init();     /* 自瞄 yaw 轴 */
-  Vision_Init();  /* 视觉坐标归一化 */
-  Fsm_Init();     /* 时序状态机 */
-  Cmd_Init();     /* 大脑: 指令 -> 目标 */
-  Link_Init();    /* 上位机串口(唯一感知网页的地方) */
+  /*
+   * 【当前调试阶段】只跑最小电机 app(motortest), 不启用原 app/motor。
+   * 原因: 两套 app 都会注册同一批 CAN 电机(ID 2/3/4), 同时启用会在
+   *   MotorSenderGrouping 里触发 "ID crash" 死循环, 且互相覆盖目标。
+   * 待 motortest 把方向/整定验证完毕, 再决定是把它并入 motor.c 还是反之。
+   */
+  Motortest_Init(); /* 最小电机 app: 只做"转到指定角度" */
+  Trigger_Init();   /* PWM 舵机 */
+  Yaw_Init();       /* 自瞄 yaw 轴 */
+  Vision_Init();    /* 视觉坐标归一化 */
+  Fsm_Init();       /* 时序状态机 */
+  Cmd_Init();       /* 大脑: 指令 -> 目标 */
+  Link_Init();      /* 上位机串口(唯一感知网页的地方) */
 
   memset(s_mon_hb, 0, sizeof(s_mon_hb));
   memset(s_mon_stale, 0, sizeof(s_mon_stale));
@@ -230,7 +237,7 @@ void RobotTask(void) {
   Fsm_Task(); /* 自动流程推进 -> motor_cmd/servo_cmd */
 
   /* 3) 机构 app(执行) */
-  Motor_Task();
+  Motortest_Task();
   Trigger_Task();
   Yaw_Task();
 

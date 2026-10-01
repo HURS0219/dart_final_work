@@ -64,6 +64,7 @@ static float s_hold_target[LAUNCH_M_COUNT];
 static Launcher_AppStatus_s s_st;
 static Launcher_State_s s_state;
 
+
 void Cmd_Init(void) {
   memset(&s_st, 0, sizeof(s_st));
   memset(&s_state, 0, sizeof(s_state));
@@ -215,11 +216,16 @@ void Cmd_Task(void) {
       PubPushMessage(s_pub_vcmd, &vcmd);
     }
 
-    /* G,cmd 时序/急停 */
-    if (c.fsm_op == LAUNCH_FSM_OP_ESTOP_ON || c.fsm_op == LAUNCH_FSM_OP_ESTOP_OFF ||
-        c.fsm_op == LAUNCH_FSM_OP_AUTO_START || c.fsm_op == LAUNCH_FSM_OP_AUTO_STOP ||
-        c.fsm_op == LAUNCH_FSM_OP_SPRING_ZERO || c.fsm_op == LAUNCH_FSM_OP_SPRING_PREP ||
-        c.fsm_op == LAUNCH_FSM_OP_SERVO_STD || c.fsm_op == LAUNCH_FSM_OP_SERVO_PREP) {
+    /* G,cmd 时序/急停
+     * 【重要】必须先排除 LAUNCH_FSM_OP_NONE(=0): 非 G 命令不设 fsm_op, memset 后为 0。
+     *   历史上 SPRING_ZERO 曾被定义成 0, 导致每一条 N/M 命令都误触发"拉簧回零",
+     *   把刚设好的目标清成 deg_zero(现象: 命令发了但电机不动)。现在操作码从 1 起编号,
+     *   且这里显式排除 NONE, 双重保险。 */
+    if (c.fsm_op != LAUNCH_FSM_OP_NONE &&
+        (c.fsm_op == LAUNCH_FSM_OP_ESTOP_ON || c.fsm_op == LAUNCH_FSM_OP_ESTOP_OFF ||
+         c.fsm_op == LAUNCH_FSM_OP_AUTO_START || c.fsm_op == LAUNCH_FSM_OP_AUTO_STOP ||
+         c.fsm_op == LAUNCH_FSM_OP_SPRING_ZERO || c.fsm_op == LAUNCH_FSM_OP_SPRING_PREP ||
+         c.fsm_op == LAUNCH_FSM_OP_SERVO_STD || c.fsm_op == LAUNCH_FSM_OP_SERVO_PREP)) {
       switch (c.fsm_op) {
         case LAUNCH_FSM_OP_ESTOP_ON:
           s_estop = 1;

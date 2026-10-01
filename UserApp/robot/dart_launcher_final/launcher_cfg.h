@@ -55,9 +55,9 @@
  *   - LAUNCH_SC_REVERSE : 方向, 按实机确认(正转对应丝杆前进还是后退)。
  *   - 是否需要"到位后卸力": 见 LAUNCH_SC_STOP_AT_TARGET。
  */
-#define LAUNCH_SC_ID 4
+#define LAUNCH_SC_ID 3 /* 实机: 丝杆 = CAN ID3 (与拉簧B=ID4 对调) */
 #define LAUNCH_SC_RATIO 19.2032f /* ⚠ TODO 直连=19.2032, 有外加传动须重算 */
-#define LAUNCH_SC_REVERSE MOTOR_DIRECTION_NORMAL /* ⚠ TODO 按实机确认 */
+#define LAUNCH_SC_DIR (+1)
 #define LAUNCH_SC_DEG_PREP 0                     /* ⚠ TODO 丝杆行程角; 比赛不动填 0 */
 #define LAUNCH_SC_TOL_DEG 5                      /* 到位容差(输出侧 deg) */
 
@@ -71,10 +71,18 @@
 /* 丝杆 PID (M3508 角度环)
  * 说明: 丝杆负载基本恒定(不像弹簧越拉越紧), 积分需求比拉簧小, 故 Ki 可取小些。 */
 #define LAUNCH_SC_ANGLE_KP 5.0f
-#define LAUNCH_SC_ANGLE_KI 0.10f
-#define LAUNCH_SC_ANGLE_KD 0.30f
+#define LAUNCH_SC_ANGLE_KI 0.0f
+#define LAUNCH_SC_ANGLE_KD 0.0f
 #define LAUNCH_SC_ANGLE_ILIMIT 6000.0f
-#define LAUNCH_SC_ANGLE_MAXOUT 8000.0f
+#define LAUNCH_SC_ANGLE_MAXOUT 13826.0f
+
+/* 丝杆速度环 PID —— 【必须配置, 原因同拉簧】 */
+#define LAUNCH_SC_SPEED_KP 2.5f
+#define LAUNCH_SC_SPEED_KI 0.10f
+#define LAUNCH_SC_SPEED_KD 0.0f
+#define LAUNCH_SC_SPEED_DEADBAND 10.0f
+#define LAUNCH_SC_SPEED_ILIMIT 800.0f
+#define LAUNCH_SC_SPEED_MAXOUT 16384.0f
 /* 丝杆急停: 自锁 -> 减速到零后卸力(不能瞬间停, 避免自锁硬抓造成冲击) */
 #define LAUNCH_SC_ESTOP_MODE LAUNCH_ESTOP_RAMP_STOP
 
@@ -83,7 +91,7 @@
  * ==========================================================================*/
 #define LAUNCH_SA_ID 2
 #define LAUNCH_SA_RATIO 19.2032f                   /* M3508 行星减速比 */
-#define LAUNCH_SA_REVERSE MOTOR_DIRECTION_NORMAL   /* 1=反向(改后需重新取零) */
+#define LAUNCH_SA_DIR (-1)  /* ★唯一方向开关: 负方向测试 */
 
 /*
  * 拉簧 A 的行程角度(输出侧 deg), 相对该路零点:
@@ -92,19 +100,31 @@
  * 例: 输出轴要转 5 圈 -> 1800 deg
  */
 #define LAUNCH_SA_DEG_ZERO 0
-#define LAUNCH_SA_DEG_PREP 1800 /* ⚠ 按 A 弹簧实际行程填写 */
+#define LAUNCH_SA_DEG_PREP 5 /* ★安全值: 5 度, 确认方向正确后再逐步加大 */
 
 /* 到位容差(输出侧 deg): 状态机靠它判断"该步完成, 可推进下一步" */
 #define LAUNCH_SA_TOL_DEG 5
 
 /* 拉簧 A 角度环 PID —— 保持弹簧专用
  * ⚠ DEADBAND 必须 0; ⚠ KI 必须 >0; ⚠ ILIMIT 须按实测保持电流的 1.5~2 倍 */
-#define LAUNCH_SA_ANGLE_KP 5.0f
-#define LAUNCH_SA_ANGLE_KI 0.10f
-#define LAUNCH_SA_ANGLE_KD 0.30f
-#define LAUNCH_SA_ANGLE_DEADBAND 0.0f     /* ★ 必须 0, 否则保持电流被死区清零 */
-#define LAUNCH_SA_ANGLE_ILIMIT 6000.0f    /* ★ 积分限幅, 按实测保持电流调整 */
-#define LAUNCH_SA_ANGLE_MAXOUT 8000.0f    /* ★ 保持力矩上限, 防烧电机 */
+#define LAUNCH_SA_ANGLE_KP 5.0f  /* 照抄旧版 */
+#define LAUNCH_SA_ANGLE_KI 0.0f  /* 旧版角度环 Ki=0 */
+#define LAUNCH_SA_ANGLE_KD 0.0f /* ★必须为0: controller.c 的 Dout=Kd*Δ/dt, dt=0 会产生 NaN 并永久保留 */
+#define LAUNCH_SA_ANGLE_DEADBAND 8.0f  /* 照抄旧版 */
+#define LAUNCH_SA_ANGLE_ILIMIT 6000.0f
+#define LAUNCH_SA_ANGLE_MAXOUT 13826.0f /* 照抄旧版 */
+
+/* 拉簧 A 速度环 PID —— 【必须配置】
+ * close_loop_type 含 SPEED_LOOP 时, 角度环输出会作为速度环设定值再算一次,
+ * 最终下发电流取速度环输出; 若全为 0 则输出恒 0(电机不动)。
+ * 单位: 设定/反馈均为 deg/s(转子侧), 输出为电流原始值(±16384 量级)。
+ * 取值参考旧版可跑配置: Kp=2.5, Ki=0.1, MaxOut=16384, DeadBand=10。 */
+#define LAUNCH_SA_SPEED_KP 2.5f  /* 照抄旧版 DART_M3508_CONFIG */
+#define LAUNCH_SA_SPEED_KI 0.10f
+#define LAUNCH_SA_SPEED_KD 0.0f
+#define LAUNCH_SA_SPEED_DEADBAND 10.0f
+#define LAUNCH_SA_SPEED_ILIMIT 800.0f
+#define LAUNCH_SA_SPEED_MAXOUT 5000.0f /* 首次验证限流; 旧版为 16384 */
 
 /* 拉簧 A 急停策略: 锁位保持 -> 缓慢归零(卸掉弹簧储能) */
 #define LAUNCH_SA_ESTOP_MODE LAUNCH_ESTOP_HOLD_AND_HOME
@@ -113,21 +133,29 @@
  *            2. 拉簧 B (M3508, CAN1 ID3) —— 非自锁, 危险
  * ==========================================================================*/
 /* 与 A 完全独立: B 是另一根弹簧, 行程/参数可各不相同 */
-#define LAUNCH_SB_ID 3
+#define LAUNCH_SB_ID 4 /* 实机: 拉簧B = CAN ID4 */
 #define LAUNCH_SB_RATIO 19.2032f
-#define LAUNCH_SB_REVERSE MOTOR_DIRECTION_NORMAL
+#define LAUNCH_SB_DIR (+1)
 
 #define LAUNCH_SB_DEG_ZERO 0
-#define LAUNCH_SB_DEG_PREP 1980 /* ⚠ 按 B 弹簧实际行程填写(与 A 不同) */
+#define LAUNCH_SB_DEG_PREP 5 /* ★安全值 */
 
 #define LAUNCH_SB_TOL_DEG 5
 
 #define LAUNCH_SB_ANGLE_KP 5.0f
-#define LAUNCH_SB_ANGLE_KI 0.10f
-#define LAUNCH_SB_ANGLE_KD 0.30f
-#define LAUNCH_SB_ANGLE_DEADBAND 0.0f  /* ★ 必须 0 */
+#define LAUNCH_SB_ANGLE_KI 0.0f
+#define LAUNCH_SB_ANGLE_KD 0.0f
+#define LAUNCH_SB_ANGLE_DEADBAND 8.0f
 #define LAUNCH_SB_ANGLE_ILIMIT 6000.0f /* ★ 按实测调整 */
-#define LAUNCH_SB_ANGLE_MAXOUT 8000.0f /* ★ 按实测调整 */
+#define LAUNCH_SB_ANGLE_MAXOUT 13826.0f
+
+/* 拉簧 B 速度环 PID —— 【必须配置, 原因同 A】 */
+#define LAUNCH_SB_SPEED_KP 2.5f
+#define LAUNCH_SB_SPEED_KI 0.10f
+#define LAUNCH_SB_SPEED_KD 0.0f
+#define LAUNCH_SB_SPEED_DEADBAND 10.0f
+#define LAUNCH_SB_SPEED_ILIMIT 800.0f
+#define LAUNCH_SB_SPEED_MAXOUT 16384.0f
 
 #define LAUNCH_SB_ESTOP_MODE LAUNCH_ESTOP_HOLD_AND_HOME
 
@@ -229,7 +257,7 @@
 #define LAUNCH_LINK_TIMEOUT_MS 2000u
 
 /* 遥测周期(ms): 上行 F,... 帧的发送间隔(旧版 150ms) */
-#define LAUNCH_FB_PERIOD_MS 150u
+#define LAUNCH_FB_PERIOD_MS 0u /* 0=关闭周期遥测(USART6 DMA 异常时会淹没 CPU; 调试期用 RTT 看状态) */
 
 /* ============================================================================
  *            8. 视觉 (PC/Jetson -> STM32)
@@ -260,11 +288,17 @@
 #define LAUNCH_SERVO_OP_SET_DEG 4  /* V,4,deg10 : 直接给逻辑角 */
 #define LAUNCH_SERVO_OP_ZERO 5     /* V,5       : 当前位置记为 0° */
 
-/* G,cmd 时序/急停操作码 —— cmd 为下列值 */
-#define LAUNCH_FSM_OP_SPRING_ZERO 0 /* G,0  : 拉簧回零 */
-#define LAUNCH_FSM_OP_SPRING_PREP 1 /* G,1  : 拉簧到预备位 */
-#define LAUNCH_FSM_OP_SERVO_STD 2   /* G,2  : 舵机到标准位 */
-#define LAUNCH_FSM_OP_SERVO_PREP 3  /* G,3  : 舵机到预备位 */
+/* G,cmd 时序/急停操作码 —— cmd 为下列值
+ * 【重要】LAUNCH_FSM_OP_NONE 必须是 0, 且不能与任何真实操作码冲突!
+ *   原因: 非 G 开头的命令(N/M/P/V/C/A/Y...)不会设置 fsm_op, 该字段 memset 后为 0。
+ *   若把某个真实操作码也定义成 0(历史上 SPRING_ZERO 曾是 0), 则**每一条这类命令
+ *   都会被误判成 G,0**, 进而把 s_hold_target 清成 deg_zero —— 现象就是
+ *   "N,0,100 发下去但电机不动, 目标被立刻改回 0"。故真实操作码从 1 起编号。 */
+#define LAUNCH_FSM_OP_NONE 0        /* 无操作(非 G 命令的默认值) */
+#define LAUNCH_FSM_OP_SPRING_ZERO 1 /* G,0  : 拉簧回零 */
+#define LAUNCH_FSM_OP_SPRING_PREP 2 /* G,1  : 拉簧到预备位 */
+#define LAUNCH_FSM_OP_SERVO_STD 3   /* G,2  : 舵机到标准位 */
+#define LAUNCH_FSM_OP_SERVO_PREP 4  /* G,3  : 舵机到预备位 */
 #define LAUNCH_FSM_OP_AUTO_START 10 /* G,10 : 启动自动流程 */
 #define LAUNCH_FSM_OP_AUTO_STOP 11  /* G,11 : 停止自动流程 */
 #define LAUNCH_FSM_OP_ESTOP_ON 12   /* G,12 : 急停置位 */

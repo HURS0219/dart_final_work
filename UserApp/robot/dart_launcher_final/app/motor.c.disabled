@@ -58,6 +58,11 @@ typedef struct {
   /* 角度环 PID */
   float angle_kp, angle_ki, angle_kd, angle_ilimit, angle_maxout, angle_deadband;
 
+  /* 速度环 PID —— 【必须配置】close_loop_type 含 SPEED_LOOP 时, 角度环输出会作为
+   * 速度环设定值再算一次, 最终 final_output 取速度环输出。若这里全为 0, 输出恒 0,
+   * 表现为"目标/pid_ref 都对但电机不动"。 */
+  float speed_kp, speed_ki, speed_kd, speed_ilimit, speed_maxout, speed_deadband;
+
   Launcher_EstopMode_e estop_mode;
 
   /* 归零速率(输出侧 deg/s); <=0 表示该路无归零动作(丝杆) */
@@ -84,6 +89,12 @@ static const MotorStaticCfg_s kCfg[LAUNCH_M_COUNT] = {
             .angle_ilimit = LAUNCH_SA_ANGLE_ILIMIT,
             .angle_maxout = LAUNCH_SA_ANGLE_MAXOUT,
             .angle_deadband = LAUNCH_SA_ANGLE_DEADBAND,
+            .speed_kp = LAUNCH_SA_SPEED_KP,
+            .speed_ki = LAUNCH_SA_SPEED_KI,
+            .speed_kd = LAUNCH_SA_SPEED_KD,
+            .speed_ilimit = LAUNCH_SA_SPEED_ILIMIT,
+            .speed_maxout = LAUNCH_SA_SPEED_MAXOUT,
+            .speed_deadband = LAUNCH_SA_SPEED_DEADBAND,
             .estop_mode = LAUNCH_SA_ESTOP_MODE,
             .homing_rate_dps = LAUNCH_SA_HOMING_RATE_DPS,
             .stop_at_target = 0,
@@ -103,6 +114,12 @@ static const MotorStaticCfg_s kCfg[LAUNCH_M_COUNT] = {
             .angle_ilimit = LAUNCH_SB_ANGLE_ILIMIT,
             .angle_maxout = LAUNCH_SB_ANGLE_MAXOUT,
             .angle_deadband = LAUNCH_SB_ANGLE_DEADBAND,
+            .speed_kp = LAUNCH_SB_SPEED_KP,
+            .speed_ki = LAUNCH_SB_SPEED_KI,
+            .speed_kd = LAUNCH_SB_SPEED_KD,
+            .speed_ilimit = LAUNCH_SB_SPEED_ILIMIT,
+            .speed_maxout = LAUNCH_SB_SPEED_MAXOUT,
+            .speed_deadband = LAUNCH_SB_SPEED_DEADBAND,
             .estop_mode = LAUNCH_SB_ESTOP_MODE,
             .homing_rate_dps = LAUNCH_SB_HOMING_RATE_DPS,
             .stop_at_target = 0,
@@ -122,6 +139,12 @@ static const MotorStaticCfg_s kCfg[LAUNCH_M_COUNT] = {
             .angle_ilimit = LAUNCH_SC_ANGLE_ILIMIT,
             .angle_maxout = LAUNCH_SC_ANGLE_MAXOUT,
             .angle_deadband = 0.0f,
+            .speed_kp = LAUNCH_SC_SPEED_KP,
+            .speed_ki = LAUNCH_SC_SPEED_KI,
+            .speed_kd = LAUNCH_SC_SPEED_KD,
+            .speed_ilimit = LAUNCH_SC_SPEED_ILIMIT,
+            .speed_maxout = LAUNCH_SC_SPEED_MAXOUT,
+            .speed_deadband = LAUNCH_SC_SPEED_DEADBAND,
             .estop_mode = LAUNCH_SC_ESTOP_MODE,
             .homing_rate_dps = 0.0f, /* 自锁, 无归零 */
             .stop_at_target = LAUNCH_SC_STOP_AT_TARGET,
@@ -168,12 +191,35 @@ static Launcher_MotorParam_s s_param;
 
 /* ============================== 工具函数 ============================== */
 
-/** @brief 取某路的方向符号(反向时库已把 total_angle 取负) */
+/* 【方向与换算 —— 完全照抄实机验证过的 dart_launcher_web_v5_HIK】
+ *
+ * 旧版(dart_motor.c 的 SignOf/OutDeg, 与 robot_config.h 的 DART_M3508_CONFIG)
+ * 是实机跑通的, 其约定是:
+ *   1) 两个方向字段**一起**跟随 reverse:
+ *        motor_reverse_flag    = _rev
+ *        feedback_reverse_flag = _rev
+ *   2) 角度符号 SignOf 取自 **motor_reverse_flag**;
+ *      OutDeg / RotorRef / ApplySpeed 三处**都乘** SignOf。
+ *   => 反馈翻一次、换算翻一次、输出翻一次, 净效果使"命令正角度"对应
+ *      "物理上一个固定方向", 且闭环恒为负反馈。
+ *
+ * 另一关键是 MakeCfg 里 outer_loop_type = SPEED_LOOP(照抄旧版): 此时角度环
+ * 不参与计算(库的条件要求 outer==ANGLE_LOOP), 真正闭环的是速度环, 角度目标
+ * 直接作为速度环设定值 —— 等价于"以角度为指令的速度环", 是旧版稳定工作的前提。
+ *
+ * 【本文件曾经犯过的错, 勿再重犯】
+ *   - 把 outer_loop_type 改成 ANGLE_LOOP 又漏配 speed_PID -> 输出为 0/NaN, 电机不动;
+ *   - 只翻 motor_reverse_flag 而 feedback 不翻, 且换算函数符号不一致 ->
+ *     正反馈, 电机朝反方向一路冲到底(曾把弹簧拉到底弹射)。
+ */
+
+/** @brief 方向符号 —— 取自 motor_reverse_flag(与旧版 SignOf 一致) */
 static float SignOf(const MotorRuntime_s *r) {
   return (r->inst->motor_settings.motor_reverse_flag == MOTOR_DIRECTION_REVERSE) ? -1.0f : 1.0f;
 }
 
-/** @brief 输出侧角度(deg, 相对零点, 已含方向) */
+/** @brief 输出侧角度(deg, 相对零点, 已含方向)
+ * @note  反向时库已把 total_angle 取负, 故乘 SignOf 还原为"机械方向为正"。 */
 static float OutDeg(int i) {
   const MotorRuntime_s *r = &s_rt[i];
   if (!r->zero_valid) return 0.0f;
@@ -187,7 +233,7 @@ static float OutRpm(int i) {
   return r->inst->measure.speed_aps / 6.0f / ratio;
 }
 
-/** @brief 输出侧角度 -> 转子侧目标(供 DJIMotorSetPIDRef 用) */
+/** @brief 输出侧角度 -> 转子侧目标(照抄旧版: zero + SignOf*tgt*ratio) */
 static float RotorRef(int i, float out_deg) {
   const MotorRuntime_s *r = &s_rt[i];
   return r->zero + SignOf(r) * out_deg * kCfg[i].ratio;
@@ -198,11 +244,23 @@ static uint8_t AtTarget(int i) {
   return (fabsf(OutDeg(i) - s_rt[i].target) < (float)kCfg[i].tol_deg) ? 1u : 0u;
 }
 
-/** @brief 以角度环下发一个"输出侧目标"到电机 */
+/** @brief 以"角度指令"下发一个输出侧目标(照抄旧版 MotorsTask 的角度分支)
+ * @note  【关键: 外层必须用 SPEED_LOOP, 角度环不参与计算】
+ *   dji_motor.c 的角度环入口条件:
+ *       (close_loop_type & ANGLE_LOOP) && outer_loop_type == ANGLE_LOOP
+ *   若这里传 ANGLE_LOOP, 角度环会真的跑起来, 而旧版的 angle_PID.Kd=0.3 ——
+ *   controller.c 的 Dout = Kd*(Last_Measure-Measure)/dt, dt 由 DWT_GetDeltaT 给出,
+ *   首次调用或两次间隔过小时为 0 -> **直接算出 NaN**, 且 NaN 一旦写入
+ *   Iout/Last_Err 就永久保持, final_output 永远是 nan, 电机彻底不动。
+ *   (实测: settings 显示 outer=4 时 final_output=nan; 就是这个问题)
+ *
+ *   因此照抄旧版:**外层用 SPEED_LOOP**, 把"角度目标"当作速度环的设定值
+ *   (等价于位置外挂), 角度环不参与, Kd 也就不会被用到。
+ *   注意 ref 仍按 RotorRef 给出的"转子角度"表达(旧版同样如此)。 */
 static void ApplyAngle(int i, float out_deg) {
   MotorRuntime_s *r = &s_rt[i];
   DJIMotorEnable(r->inst);
-  DJIMotorOuterLoop(r->inst, ANGLE_LOOP);
+  DJIMotorOuterLoop(r->inst, SPEED_LOOP);
   DJIMotorSetPIDRef(r->inst, RotorRef(i, out_deg));
   r->stopped = 0;
 }
@@ -212,7 +270,7 @@ static void ApplySpeed(int i, float rpm) {
   MotorRuntime_s *r = &s_rt[i];
   DJIMotorEnable(r->inst);
   DJIMotorOuterLoop(r->inst, SPEED_LOOP);
-  /* 转子侧速度(deg/s) = 输出 rpm * ratio * 6 */
+  /* 转子侧速度(deg/s) = 输出 rpm * ratio * 6; 乘 SignOf(照抄旧版 ApplySpeed) */
   DJIMotorSetPIDRef(r->inst, SignOf(r) * rpm * kCfg[i].ratio * 6.0f);
   r->stopped = 0;
 }
@@ -240,24 +298,64 @@ static Motor_Init_Config_s MakeCfg(int i) {
   cfg.can_init_config.can_handle = &hcan1;
   cfg.can_init_config.tx_id = c->tx_id;
 
+  /* ============================ 控制设置(照抄旧版) ============================
+   * 旧版 dart_launcher_web_v5_HIK 的 DART_M3508_CONFIG 是实机跑通的, 这里逐项对齐:
+   *   outer_loop_type = SPEED_LOOP       <-- 关键! 不是 ANGLE_LOOP
+   *   close_loop_type = SPEED|ANGLE
+   *   motor_reverse_flag / feedback_reverse_flag **一起**跟随 reverse
+   *
+   * 【为什么 outer_loop_type 必须 SPEED_LOOP】
+   * dji_motor.c 的角度环入口条件是:
+   *     (close_loop_type & ANGLE_LOOP) && outer_loop_type == ANGLE_LOOP
+   * 令 outer=SPEED_LOOP 时**角度环不参与计算**, 真正闭环的是速度环, 而
+   * app 下发的"角度目标"直接作为速度环的设定值 —— 等价于"以角度为指令的
+   * 速度环"。旧版正是靠这个组合稳定工作。
+   *
+   * 【曾经踩过的坑】把 outer 改成 ANGLE_LOOP 走纯角度环: 一来速度环漏配会让
+   * 输出恒 0/NaN(电机不动), 二来 PID 的 dt 来自 DWT_GetDeltaT, 首次或间隔
+   * 过小时为 0, Kd/dt 会直接产生 NaN 且永久留存。故此处不做"优化", 照抄旧版。
+   */
   cfg.controller_setting_init_config.angle_feedback_source = MOTOR_FEED;
   cfg.controller_setting_init_config.speed_feedback_source = MOTOR_FEED;
-  cfg.controller_setting_init_config.outer_loop_type = ANGLE_LOOP; /* 上电默认角度环 */
+  cfg.controller_setting_init_config.outer_loop_type = SPEED_LOOP;
   cfg.controller_setting_init_config.close_loop_type = SPEED_LOOP | ANGLE_LOOP;
+
+  /* 【方向】两个字段一起翻(照抄旧版), 配合 SignOf() 取 motor_reverse_flag:
+   *   反馈翻一次 + 换算翻一次 + 输出翻一次 => 命令正角度对应固定机械方向,
+   *   闭环恒为负反馈。
+   * 【坑】若只翻一个(或换算函数符号不一致)会形成正反馈 —— 电机朝反方向
+   *   一路冲到底、满电流死顶, 曾把弹簧拉到极限后弹射飞出。改方向务必先用
+   *   小 MaxOut + 小角度验证。 */
   cfg.controller_setting_init_config.motor_reverse_flag = c->reverse;
   cfg.controller_setting_init_config.feedback_reverse_flag =
       (c->reverse == MOTOR_DIRECTION_REVERSE) ? FEEDBACK_DIRECTION_REVERSE
                                               : FEEDBACK_DIRECTION_NORMAL;
 
-  /* 角度环 PID —— 保持弹簧的关键参数
-   * Improve 用"最小必要集": 积分限幅(有 Ki 就必须有) + 微分先行(急停时目标跳到当前角,
-   * 误差会突变; 对测量值微分则不受设定值跳变影响, 避免瞬间冲量)。 */
+  /* ---------------------------- 速度环 PID(照抄旧版数值) ----------------------------
+   * Kp=2.5 Ki=0.1 MaxOut=16384 DeadBand=10 IntegralLimit=800
+   * Improve: 积分限幅 + 梯形积分 + 堵转检测(ErrorHandle)
+   * 【注意】此处 MaxOut=16384 是"速度环输出"的上限(即最终电流量级),
+   *   与旧版一致; 若要限流调试, 请改 cfg 的 LAUNCH_S?_SPEED_MAXOUT。 */
+  cfg.controller_param_init_config.speed_PID.Kp = c->speed_kp;
+  cfg.controller_param_init_config.speed_PID.Ki = c->speed_ki;
+  cfg.controller_param_init_config.speed_PID.Kd = c->speed_kd;
+  cfg.controller_param_init_config.speed_PID.MaxOut = c->speed_maxout;
+  cfg.controller_param_init_config.speed_PID.DeadBand = c->speed_deadband;
+  cfg.controller_param_init_config.speed_PID.IntegralLimit = c->speed_ilimit;
+  cfg.controller_param_init_config.speed_PID.Improve =
+      PID_Integral_Limit | PID_Trapezoid_Intergral | PID_ErrorHandle;
+
+  /* ---------------------------- 角度环 PID(照抄旧版数值) ----------------------------
+   * Kp=5.0 Ki=0.0 Kd=0.3 MaxOut=13826 DeadBand=8
+   * Improve: 积分限幅 + 微分先行(急停时目标跳到当前角, 用微分先行避免冲量)
+   * 说明: outer=SPEED_LOOP 时角度环不参与计算, 这组参数只在切到 ANGLE_LOOP
+   *   (Q 命令或以后改回)时生效, 但仍按旧版填好。 */
   cfg.controller_param_init_config.angle_PID.Kp = c->angle_kp;
   cfg.controller_param_init_config.angle_PID.Ki = c->angle_ki;
   cfg.controller_param_init_config.angle_PID.Kd = c->angle_kd;
-  cfg.controller_param_init_config.angle_PID.IntegralLimit = c->angle_ilimit;
   cfg.controller_param_init_config.angle_PID.MaxOut = c->angle_maxout;
   cfg.controller_param_init_config.angle_PID.DeadBand = c->angle_deadband;
+  cfg.controller_param_init_config.angle_PID.IntegralLimit = c->angle_ilimit;
   cfg.controller_param_init_config.angle_PID.Improve =
       PID_Integral_Limit | PID_Derivative_On_Measurement;
 
@@ -436,10 +534,9 @@ void Motor_Task(void) {
         Motor_Reverse_Flag_e nr = (m->motor_settings.motor_reverse_flag == MOTOR_DIRECTION_NORMAL)
                                       ? MOTOR_DIRECTION_REVERSE
                                       : MOTOR_DIRECTION_NORMAL;
+        /* 只翻这一个开关(方向唯一入口); feedback 恒 NORMAL, 换算函数符号见 RotorRef */
         m->motor_settings.motor_reverse_flag = nr;
-        m->motor_settings.feedback_reverse_flag =
-            (nr == MOTOR_DIRECTION_REVERSE) ? FEEDBACK_DIRECTION_REVERSE
-                                            : FEEDBACK_DIRECTION_NORMAL;
+        m->motor_settings.feedback_reverse_flag = FEEDBACK_DIRECTION_NORMAL;
         r->zero = m->measure.total_angle; /* 方向变了重新取零 */
         r->zero_valid = 1;
       }

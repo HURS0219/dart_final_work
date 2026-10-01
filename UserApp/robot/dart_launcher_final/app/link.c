@@ -31,6 +31,7 @@
 #include "SEGGER_RTT.h" /* RTT 命令控制台(下行通道 0) */
 #include "launcher_cfg.h"
 #include "message_center.h"
+#include "motortest.h" /* T/K 命令直控最小电机 app(调试用) */
 #include "usart.h" /* LAUNCH_LINK_UART 展开为 &huart6 */
 
 static USARTInstance *s_usart = NULL;
@@ -205,6 +206,33 @@ static void ProcessOne(char *buf) {
       }
       break;
 
+    /* ================= 最小电机 app 直控(调试阶段) =================
+     * T,<slot>,<deg>   : 让 slot 路转到 deg 度(输出侧, 相对零点), 走角度环
+     * T,<slot>,-9999   : 停该路(卸力)
+     * T,<slot>,Z       : 把当前位置记为 0 度(取零)
+     * 说明: 这条通道绕过 cmd/fsm, 直接调用 motortest 的接口, 便于在 RTT 上
+     *   把"方向/整定"单独验证出来, 不受状态机与话题耦合干扰。 */
+    case 'T': {
+      if (n >= 1) {
+        int slot = (int)a[0];
+        if (slot >= 0 && slot < LAUNCH_M_COUNT) {
+          if (n >= 2) {
+            Motortest_SetAngle(slot, (float)a[1]);
+          } else {
+            Motortest_Stop(slot);
+          }
+        }
+      }
+      break;
+    }
+    case 'K': { /* K,<slot> : 取零 */
+      if (n >= 1) {
+        int slot = (int)a[0];
+        if (slot >= 0 && slot < LAUNCH_M_COUNT) Motortest_Zero(slot);
+      }
+      break;
+    }
+
     case 'V': /* V,a[,b] : 舵机操作 */
       if (n >= 1) {
         s_cmd.servo_op = (uint8_t)a[0];
@@ -214,8 +242,23 @@ static void ProcessOne(char *buf) {
       break;
 
     case 'G': /* G,cmd : 时序/急停 */
+      /* 【重要】线上协议里 G,0/G,1/G,2/G,3 就是操作码本身(0-based);
+       * 但内部枚举 LAUNCH_FSM_OP_* 用 0 表示"无操作"(因为非 G 命令不设 fsm_op,
+       * 该字段 memset 后为 0)。故这里必须把线上升高 1 映射到内部值,
+       * 否则 "G,0" 与"没有 fsm_op"无法区分 —— 曾导致每一条 N/M 命令都被
+       * 误判成 G,0(拉簧回零), 把刚设的目标清掉。 */
       if (n >= 1) {
-        s_cmd.fsm_op = (uint8_t)a[0];
+        switch ((int)a[0]) {
+          case 0: s_cmd.fsm_op = LAUNCH_FSM_OP_SPRING_ZERO; break;
+          case 1: s_cmd.fsm_op = LAUNCH_FSM_OP_SPRING_PREP; break;
+          case 2: s_cmd.fsm_op = LAUNCH_FSM_OP_SERVO_STD; break;
+          case 3: s_cmd.fsm_op = LAUNCH_FSM_OP_SERVO_PREP; break;
+          case 10: s_cmd.fsm_op = LAUNCH_FSM_OP_AUTO_START; break;
+          case 11: s_cmd.fsm_op = LAUNCH_FSM_OP_AUTO_STOP; break;
+          case 12: s_cmd.fsm_op = LAUNCH_FSM_OP_ESTOP_ON; break;
+          case 13: s_cmd.fsm_op = LAUNCH_FSM_OP_ESTOP_OFF; break;
+          default: s_cmd.fsm_op = LAUNCH_FSM_OP_NONE; break; /* 未知操作码: 不动作 */
+        }
       }
       break;
 
