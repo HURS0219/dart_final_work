@@ -5,8 +5,9 @@
       "id": "robot",
       "type": "pickString",
       "description": "选择 robot (UserApp/robot/<name>)",
-      "default": "dart_final",
+      "default": "run_motor1",
       "options": [
+        "run_motor1",
         "dart_final",
         "dart_final_test_app",
         "servo_test",
@@ -70,6 +71,26 @@
       "presentation": { "reveal": "always", "panel": "shared", "clear": true }
     },
     {
+      "label": "Flash: 一键烧录 run_motor1 (Build+Flash)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\Tools\\scripts\\oneclick_flash.ps1",
+        "-Robot",
+        "run_motor1",
+        "-Board",
+        "GIMBAL_BOARD"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$gcc"],
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true }
+    },
+    {
       "label": "Flash: 一键烧录 (选择 robot)",
       "type": "shell",
       "command": "powershell",
@@ -86,7 +107,7 @@
       ],
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": ["$gcc"],
-      "group": { "kind": "build", "isDefault": true },
+      "group": { "kind": "build" },
       "presentation": { "reveal": "always", "panel": "shared", "clear": true }
     },
     {
