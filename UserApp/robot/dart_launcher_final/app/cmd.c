@@ -18,6 +18,7 @@
 
 #include "bsp_dwt.h"
 #include "launcher_cfg.h"
+#include "motortest.h" /* 直驱最小电机 app */
 #include "message_center.h"
 
 static Subscriber_t *s_sub_cmd = NULL;
@@ -36,6 +37,8 @@ static Publisher_t *s_pub_vcmd = NULL;
 /* ---- 状态 ---- */
 static uint8_t s_estop = 0;
 static uint8_t s_estop_clr_cnt = 0; /* >0 时连续发 estop_clr(防单周期脉冲丢失) */
+static uint8_t s_start_cnt = 0;     /* >0 时连续发 fsm start 脉冲(同样防丢失) */
+static uint8_t s_stop_cnt = 0;      /* >0 时连续发 fsm stop 脉冲 */
 static uint8_t s_yaw_mode = LAUNCH_YAW_MANUAL;
 static float s_aim_rpm = LAUNCH_YAW_AIM_RPM;
 static uint32_t s_last_cmd_ms = 0;
@@ -71,6 +74,8 @@ void Cmd_Init(void) {
 
   s_estop = 0;
   s_estop_clr_cnt = 0;
+  s_start_cnt = 0;
+  s_stop_cnt = 0;
   s_yaw_mode = LAUNCH_YAW_MANUAL;
   s_aim_rpm = LAUNCH_YAW_AIM_RPM;
   s_last_cmd_ms = 0;
@@ -230,6 +235,8 @@ void Cmd_Task(void) {
         case LAUNCH_FSM_OP_ESTOP_ON:
           s_estop = 1;
           s_estop_clr_cnt = 0;
+  s_start_cnt = 0;
+  s_stop_cnt = 0;
           break;
         case LAUNCH_FSM_OP_ESTOP_OFF:
           s_estop = 0;
@@ -237,8 +244,15 @@ void Cmd_Task(void) {
            * 覆盖而丢失的风险(会导致急停解不掉) -> 连续发若干帧确保 motor 侧收到。 */
           s_estop_clr_cnt = 20;
           break;
-        case LAUNCH_FSM_OP_AUTO_START: fcmd.start = 1; break;
-        case LAUNCH_FSM_OP_AUTO_STOP: fcmd.stop = 1; break;
+        /* 【重要】start/stop 不能只用单帧脉冲: message_center 队列深度为 1,
+         * 单帧会在 1ms 内被下一帧覆盖, fsm 侧读不到(实测: G,10 发了但 fsm 的
+         * SubGetMessage 从未见到 start=1, 时序一直停在 IDLE)。改为连续发若干帧。 */
+        case LAUNCH_FSM_OP_AUTO_START:
+          s_start_cnt = 20;
+          break;
+        case LAUNCH_FSM_OP_AUTO_STOP:
+          s_stop_cnt = 20;
+          break;
         case LAUNCH_FSM_OP_SPRING_ZERO:
           s_hold_mode[LAUNCH_M_SPRING_A] = LAUNCH_MODE_ANGLE;
           s_hold_target[LAUNCH_M_SPRING_A] = (float)LAUNCH_SA_DEG_ZERO;
@@ -259,7 +273,11 @@ void Cmd_Task(void) {
   }
 
   /* ---- 链路超时: 失联降级 ---- */
-  if (s_last_cmd_ms != 0 && (now - s_last_cmd_ms) > LAUNCH_LINK_TIMEOUT_MS) {
+  /* LAUNCH_LINK_TIMEOUT_MS == 0 表示**禁用**该降级(调试期必须禁用):
+   * 否则用 RTT 发一条命令后 2 秒就被判定失联, fcmd.stop=1 把自动时序停掉
+   * ——实测时序推进到第 3 步就回到 IDLE, 就是这个原因。 */
+  if (LAUNCH_LINK_TIMEOUT_MS > 0u && s_last_cmd_ms != 0 &&
+      (now - s_last_cmd_ms) > LAUNCH_LINK_TIMEOUT_MS) {
     if (s_link_ok) {
       s_link_ok = 0;
       fcmd.stop = 1; /* 停自动流程 */
@@ -286,6 +304,17 @@ void Cmd_Task(void) {
     fcmd.estop_clr = 1;
   }
 
+  /* 时序 start/stop: 同样连续发若干帧(见 fsm_op 分支里的说明)。
+   * 不这样做的话, fsm 侧因队列深度 1 会读不到这个脉冲。 */
+  if (s_start_cnt > 0) {
+    s_start_cnt--;
+    fcmd.start = 1;
+  }
+  if (s_stop_cnt > 0) {
+    s_stop_cnt--;
+    fcmd.stop = 1;
+  }
+
   /* ---- 舵机 ---- */
   scmd.std_deg = s_sv_std;
   scmd.prep_deg = s_sv_prep;
@@ -309,6 +338,18 @@ void Cmd_Task(void) {
   PubPushMessage(s_pub_scmd, &scmd);
   PubPushMessage(s_pub_ycmd, &ycmd);
   PubPushMessage(s_pub_fcmd, &fcmd);
+
+  /* ---- 直驱电机(当前调试阶段 app/motor 未启用, 改由 motortest 执行) ----
+   * 语义与 s_hold_* 一致(保持型): 每周期把"当前应保持的逐路目标"下发一次。
+   * 急停时不给拉簧下目标(由 app/fsm 或上层决定如何卸能), 避免"一边急着停、
+   * 一边还在推"的矛盾。 */
+  if (!s_estop) {
+    for (int i = 0; i < LAUNCH_M_COUNT; i++) {
+      if (s_hold_mode[i] == LAUNCH_MODE_ANGLE) {
+        Motortest_SetAngle(i, s_hold_target[i]);
+      }
+    }
+  }
 
   /* ---- 整机状态 ---- */
   s_state.estop = s_estop;

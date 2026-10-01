@@ -181,13 +181,14 @@ static void SysTelemetry(float dt_ms) {
           (unsigned)Motortest_GetStatus()->hb, (unsigned)Trigger_GetStatus()->hb,
           (unsigned)Vision_GetStatus()->hb, (unsigned)Yaw_GetStatus()->hb);
 
-  /* 机构关键量: 无网页时靠这条在 RTT 观察机构状态(角度为输出侧 deg) */
-  LOGINFO("[lch] A deg=%d tgt=%d on=%d at=%d | B deg=%d tgt=%d on=%d at=%d | SC deg=%d on=%d",
-          (int)Motortest_GetAngle(0), (int)0, (int)Motortest_IsOnline(0),
-          (int)Motortest_AtTarget(0),
-          (int)Motortest_GetAngle(1), (int)0, (int)Motortest_IsOnline(1),
-          (int)Motortest_AtTarget(1), (int)Motortest_GetAngle(2),
-          (int)Motortest_IsOnline(2));
+  /* 机构关键量: 无网页时靠这条在 RTT 观察机构状态(角度为输出侧 deg)
+   * 【注意】格式串的 %d 个数必须与参数个数**严格相等**, 否则参数错位、读到的
+   *   是别的变量(曾因此把 B 的 717 度显示成 0, 掩盖了真实状态)。
+   *   本行 11 个 %d <=> 11 个参数, 一一对应。 */
+  LOGINFO("[lch] sys=%d fault=0x%04X step=%d | A deg=%d on=%d at=%d | B deg=%d on=%d at=%d",
+          (int)s_state, s_fault_bits, (int)Fsm_GetStatus()->key,
+          (int)Motortest_GetAngle(0), (int)Motortest_IsOnline(0), (int)Motortest_AtTarget(0),
+          (int)Motortest_GetAngle(1), (int)Motortest_IsOnline(1), (int)Motortest_AtTarget(1));
 
   Dart_Vofa_Push();
 }

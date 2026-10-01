@@ -82,7 +82,7 @@
 #define LAUNCH_SC_SPEED_KD 0.0f
 #define LAUNCH_SC_SPEED_DEADBAND 10.0f
 #define LAUNCH_SC_SPEED_ILIMIT 800.0f
-#define LAUNCH_SC_SPEED_MAXOUT 16384.0f
+#define LAUNCH_SC_SPEED_MAXOUT 5000.0f
 /* 丝杆急停: 自锁 -> 减速到零后卸力(不能瞬间停, 避免自锁硬抓造成冲击) */
 #define LAUNCH_SC_ESTOP_MODE LAUNCH_ESTOP_RAMP_STOP
 
@@ -100,7 +100,7 @@
  * 例: 输出轴要转 5 圈 -> 1800 deg
  */
 #define LAUNCH_SA_DEG_ZERO 0
-#define LAUNCH_SA_DEG_PREP 5 /* ★安全值: 5 度, 确认方向正确后再逐步加大 */
+#define LAUNCH_SA_DEG_PREP 2000 /* 时序用上膛角(A); 空载演练值 */
 
 /* 到位容差(输出侧 deg): 状态机靠它判断"该步完成, 可推进下一步" */
 #define LAUNCH_SA_TOL_DEG 5
@@ -124,7 +124,7 @@
 #define LAUNCH_SA_SPEED_KD 0.0f
 #define LAUNCH_SA_SPEED_DEADBAND 10.0f
 #define LAUNCH_SA_SPEED_ILIMIT 800.0f
-#define LAUNCH_SA_SPEED_MAXOUT 5000.0f /* 首次验证限流; 旧版为 16384 */
+#define LAUNCH_SA_SPEED_MAXOUT 5000.0f /* 实测保持仅需 ~500, 5000 有 10 倍余量且更安全 */
 
 /* 拉簧 A 急停策略: 锁位保持 -> 缓慢归零(卸掉弹簧储能) */
 #define LAUNCH_SA_ESTOP_MODE LAUNCH_ESTOP_HOLD_AND_HOME
@@ -138,7 +138,7 @@
 #define LAUNCH_SB_DIR (+1)
 
 #define LAUNCH_SB_DEG_ZERO 0
-#define LAUNCH_SB_DEG_PREP 5 /* ★安全值 */
+#define LAUNCH_SB_DEG_PREP 2000 /* 时序用上膛角(B) */
 
 #define LAUNCH_SB_TOL_DEG 5
 
@@ -155,7 +155,7 @@
 #define LAUNCH_SB_SPEED_KD 0.0f
 #define LAUNCH_SB_SPEED_DEADBAND 10.0f
 #define LAUNCH_SB_SPEED_ILIMIT 800.0f
-#define LAUNCH_SB_SPEED_MAXOUT 16384.0f
+#define LAUNCH_SB_SPEED_MAXOUT 5000.0f /* 同上 */
 
 #define LAUNCH_SB_ESTOP_MODE LAUNCH_ESTOP_HOLD_AND_HOME
 
@@ -254,7 +254,7 @@
 
 /* 链路超时(ms): 超过该时间未收到任何上位机数据 -> 视为失联, 由 cmd 做"失联停车"
  * 说明: 旧版为 2000ms; ESP32 每 500ms 发一次 H 心跳, 故 2000ms 有 4 次容错。 */
-#define LAUNCH_LINK_TIMEOUT_MS 2000u
+#define LAUNCH_LINK_TIMEOUT_MS 0u /* 0=禁用链路超时降级。调试期必须为 0: 否则每次只发一条 RTT 命令, 2 秒后就被判定失联并把自动时序停掉(实测时序卡在 step=3 后回到 IDLE 就是这个原因) */
 
 /* 遥测周期(ms): 上行 F,... 帧的发送间隔(旧版 150ms) */
 #define LAUNCH_FB_PERIOD_MS 0u /* 0=关闭周期遥测(USART6 DMA 异常时会淹没 CPU; 调试期用 RTT 看状态) */

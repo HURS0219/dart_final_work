@@ -62,18 +62,18 @@ if srt is None:
     print("找不到 s_rt")
     sys.exit(1)
 
-rt = rd(srt + slot * 0x30, 0x30)
+rt = rd(srt + slot * 0x18, 0x18)   # MotorRt_s 步长 = 24 字节
 inst = struct.unpack_from("<I", rt, 0)[0]
 zero = struct.unpack_from("<f", rt, 4)[0]
 zero_valid = rt[8]
-target = struct.unpack_from("<f", rt, 28)[0]
-mode = rt[24]
+target = struct.unpack_from("<f", rt, 20)[0]
+run = rt[17]   # 1=已使能
 
-print("=== s_rt[%d] @0x%08X ===" % (slot, srt + slot * 0x30))
+print("=== s_rt[%d] @0x%08X ===" % (slot, srt + slot * 0x18))
 print("  inst       = 0x%08X" % inst)
 print("  zero       = %.4f" % zero)
 print("  zero_valid = %d" % zero_valid)
-print("  mode       = %d (0=STOP 2=ANGLE 1=SPEED)" % mode)
+print("  run        = %d (1=已启动角度环)" % run)
 print("  target     = %.4f" % target)
 
 if inst == 0:
