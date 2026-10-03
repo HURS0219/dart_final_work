@@ -23,6 +23,13 @@
 #include "dart_vision.h"
 #include "main.h"
 #include "robot_config.h"
+#include "SEGGER_RTT.h" /* J-Link RTT 备用链路(无 ESP 时经 SWD 调参) */
+
+/* RTT 专用通道(与 bsp_log 的日志通道 0 分开): 上行=遥测/回包, 下行=命令 */
+#define DART_RTT_CH 1
+static char s_rtt_up[4096];
+static char s_rtt_down[512];
+static int s_rtt_inited = 0;
 
 static USARTInstance* s_usart = NULL;
 static uint32_t s_last_cmd = 0;
@@ -202,7 +209,42 @@ static void SendTelemetry(void) {
   DartLinkSend(buf);
 }
 
+/* ---- J-Link RTT 链路(可选, 与串口并存) ----
+ * 无 ESP 时, PC 经 SWD 写 RTT 下行通道(命令) / 读上行通道(遥测),
+ * 与串口共用同一 ProcessCmd/遥测格式, 上层协议不变。 */
+static char s_rtt_line[128];
+static int s_rtt_len = 0;
+
+static void DartLinkRttPoll(void) {
+  char b[64];
+  unsigned n = SEGGER_RTT_Read(DART_RTT_CH, b, sizeof(b));
+  for (unsigned i = 0; i < n; i++) {
+    char c = b[i];
+    if (c == '\n' || c == '\r') {
+      if (s_rtt_len > 0) {
+        s_rtt_line[s_rtt_len] = 0;
+        s_last_cmd = HAL_GetTick();
+        ProcessCmd(s_rtt_line);
+        s_rtt_len = 0;
+      }
+    } else if (s_rtt_len < (int)sizeof(s_rtt_line) - 1) {
+      s_rtt_line[s_rtt_len++] = c;
+    } else {
+      s_rtt_len = 0;
+    }
+  }
+}
+
 void DartLinkInit(void) {
+  /* RTT 通道配置(可失败: 无 J-Link 时也能正常跑串口) */
+  if (!s_rtt_inited) {
+    SEGGER_RTT_ConfigUpBuffer(DART_RTT_CH, "DARTLNK", s_rtt_up, sizeof(s_rtt_up),
+                              SEGGER_RTT_MODE_NO_BLOCK_SKIP);
+    SEGGER_RTT_ConfigDownBuffer(DART_RTT_CH, "DARTLNK", s_rtt_down, sizeof(s_rtt_down),
+                                SEGGER_RTT_MODE_NO_BLOCK_SKIP);
+    s_rtt_inited = 1;
+  }
+
   USART_Init_Config_s cfg = {
       .recv_buff_size = DART_RECV_SIZE,
       .usart_handle = DART_UART_HANDLE,
@@ -212,6 +254,8 @@ void DartLinkInit(void) {
 }
 
 void DartLinkTask(void) {
+  DartLinkRttPoll(); /* PC 经 J-Link 发来的命令 */
+
   if (DartStoreTakeSaved()) DartLinkSendBlocking("SAVED\n");
 
   static uint8_t timed_out = 0;
@@ -233,12 +277,16 @@ void DartLinkTask(void) {
 }
 
 void DartLinkSend(const char* s) {
-  if (s_usart == NULL || s == NULL) return;
+  if (s == NULL) return;
+  SEGGER_RTT_WriteString(DART_RTT_CH, s); /* J-Link 上行(无 ESP 时用) */
+  if (s_usart == NULL) return;
   USARTSend(s_usart, (uint8_t*)s, (uint16_t)strlen(s), USART_TRANSFER_IT);
 }
 
 void DartLinkSendBlocking(const char* s) {
-  if (s_usart == NULL || s == NULL) return;
+  if (s == NULL) return;
+  SEGGER_RTT_WriteString(DART_RTT_CH, s);
+  if (s_usart == NULL) return;
   uint32_t t0 = HAL_GetTick();
   while (s_usart->usart_handle->gState != HAL_UART_STATE_READY) {
     if (HAL_GetTick() - t0 > 50) break;
