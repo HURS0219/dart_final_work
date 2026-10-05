@@ -1,5 +1,9 @@
 # dart_launcher_final · 制导飞镖发射架整机控制
 
+> ⚠ **ESP32 网页版已移除**：本目录的 `esp32/` 已删除。发射架上位机网页统一用
+> **`Tools/dart_launcher_web_pc/`**（PC + J-Link RTT，**无需 ESP**）。下文凡提及 `esp32/`
+> 之处仅作历史参考。
+
 <p align='right'>ai @ dart_final_work</p>
 
 `dart_launcher_final` 是制导飞镖**发射架**的整机控制 app：**两根拉簧上膛 + 自锁丝杆 + 扳机舵机 + yaw 自瞄轴**。

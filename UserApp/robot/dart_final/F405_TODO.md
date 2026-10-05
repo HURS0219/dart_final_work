@@ -1,5 +1,8 @@
 # dart_final on F405 实板 — 未完成 / 待定细节 (以后再调)
 
+> ⚠ **ESP32 相关已移除**：`dart_final_1/esp32/`（含 `esp_u0_link` C 工程）及其它 app 的
+> `esp32/` 已删除。网页/上位机统一用 **`Tools/dart_launcher_web_pc/`**（PC + J-Link RTT）。
+
 > **状态**: 板子尚未投板/打印。以下均为**代码级已完成、但未上电验证**, 或**参数/协议未定**,
 > 待实板到手或联调时处理。引脚网表见同目录 `HARDWARE.md`。
 > 本次改动**尚未 git commit**。
