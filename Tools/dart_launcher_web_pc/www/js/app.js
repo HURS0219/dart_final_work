@@ -38,8 +38,8 @@ function parseState(t) {
 /* ---- 卡片实例 ---- */
 const motorCards = [
   new M3508Card(0, "拉簧 A", "M3508 · ID2"),
-  new M3508Card(1, "拉簧 B", "M3508 · ID3"),
-  new M3508Card(2, "扳机丝杆", "M3508 · ID4"),
+  new M3508Card(1, "拉簧 B", "M3508 · ID4"),
+  new M3508Card(2, "扳机丝杆", "M3508 · ID3"),
   new M2006Card(3, "Yaw 轴", "M2006 · ID1")
 ];
 const servoCard = new PTK7350Card("扳机舵机", "PWM · TIM1_CH1");

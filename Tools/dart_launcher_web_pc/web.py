@@ -5,8 +5,8 @@ import os
 import socket
 
 _WWW = os.path.join(os.path.dirname(os.path.abspath(__file__)), "www")
-BIND_HOST = "127.0.0.1"
-BIND_PORT = 8000
+BIND_HOST = os.environ.get("DART_WEB_HOST", "127.0.0.1")
+BIND_PORT = int(os.environ.get("DART_WEB_PORT", "8000"))
 
 
 def send_all(sock, data):

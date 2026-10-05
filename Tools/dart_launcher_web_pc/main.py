@@ -20,14 +20,14 @@ def main():
     bus = Bus()
     motors = [
         M3508(bus, 0, "拉簧A", 2),
-        M3508(bus, 1, "拉簧B", 3),
-        M3508(bus, 2, "扳机", 4),
+        M3508(bus, 1, "拉簧B", 4),
+        M3508(bus, 2, "扳机", 3),
         M2006(bus, 3, "Yaw", 1),
     ]
     servo = PTK7350(bus, "trigger")
     task = Task(bus)
     web = WebServer(bus, motors, servo, task)
-    print("HTTP server: http://127.0.0.1:8000")
+    print("HTTP server: http://%s:%d" % (web.BIND_HOST, web.BIND_PORT))
     print("(Ctrl+C 退出)")
 
     last_hb = 0

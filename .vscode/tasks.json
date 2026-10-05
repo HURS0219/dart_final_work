@@ -5,16 +5,20 @@
       "id": "robot",
       "type": "pickString",
       "description": "选择 robot (UserApp/robot/<name>)",
-      "default": "run_motor1",
+      "default": "dart_launcher_v6",
       "options": [
-        "run_motor1",
+        "dart_launcher_v6",
+        "dart_launcher_web_v5_HIK",
+        "dart_launcher_final",
         "dart_final",
+        "dart_final_1",
         "dart_final_test_app",
-        "servo_test",
         "dart_fc",
         "dart",
         "dart_servo_v0.2",
-        "dart_launcher_web_v5_HIK",
+        "launcher_gpt",
+        "servo_test",
+        "run_motor1",
         "hero_mecanum_example1",
         "infantry_six_wheel_example2"
       ]
@@ -27,69 +31,13 @@
       "options": [
         "GIMBAL_BOARD",
         "CHASSIS_BOARD",
-        "ONE_BOARD"
+        "ONE_BOARD",
+        "H743_BOARD",
+        "DART_F405_BOARD"
       ]
     }
   ],
   "tasks": [
-    {
-      "label": "Flash: 一键烧录 dart_final (Build+Flash)",
-      "type": "shell",
-      "command": "powershell",
-      "args": [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "${workspaceFolder}\\Tools\\scripts\\oneclick_flash.ps1",
-        "-Robot",
-        "dart_final",
-        "-Board",
-        "GIMBAL_BOARD"
-      ],
-      "options": { "cwd": "${workspaceFolder}" },
-      "problemMatcher": ["$gcc"],
-      "presentation": { "reveal": "always", "panel": "shared", "clear": true }
-    },
-    {
-      "label": "Flash: 一键烧录 dart_final_test_app (Build+Flash)",
-      "type": "shell",
-      "command": "powershell",
-      "args": [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "${workspaceFolder}\\Tools\\scripts\\oneclick_flash.ps1",
-        "-Robot",
-        "dart_final_test_app",
-        "-Board",
-        "GIMBAL_BOARD"
-      ],
-      "options": { "cwd": "${workspaceFolder}" },
-      "problemMatcher": ["$gcc"],
-      "presentation": { "reveal": "always", "panel": "shared", "clear": true }
-    },
-    {
-      "label": "Flash: 一键烧录 run_motor1 (Build+Flash)",
-      "type": "shell",
-      "command": "powershell",
-      "args": [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "${workspaceFolder}\\Tools\\scripts\\oneclick_flash.ps1",
-        "-Robot",
-        "run_motor1",
-        "-Board",
-        "GIMBAL_BOARD"
-      ],
-      "options": { "cwd": "${workspaceFolder}" },
-      "problemMatcher": ["$gcc"],
-      "group": { "kind": "build", "isDefault": true },
-      "presentation": { "reveal": "always", "panel": "shared", "clear": true }
-    },
     {
       "label": "Flash: 一键烧录 (选择 robot)",
       "type": "shell",
@@ -107,11 +55,38 @@
       ],
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": ["$gcc"],
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true }
+    },
+    {
+      "label": "一键: 烧录 + 启动 PC 网页 (选择 robot/board)",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "Flash: 一键烧录 (选择 robot)",
+        "Web: 启动 PC 网页 (J-Link, 选择 board)"
+      ],
+      "problemMatcher": [],
       "group": { "kind": "build" },
       "presentation": { "reveal": "always", "panel": "shared", "clear": true }
     },
     {
-      "label": "Flash: 仅烧录, 不编译 (选择 robot)",
+      "label": "Web: 启动 PC 网页 (J-Link, 选择 board)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\Tools\\scripts\\run_web_pc.ps1",
+        "-Board",
+        "${input:board}"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "shared", "clear": false }
+    },
+    {
+      "label": "Flash: 仅烧录 不编译 (选择 robot)",
       "type": "shell",
       "command": "powershell",
       "args": [

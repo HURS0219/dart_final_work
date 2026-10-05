@@ -3,6 +3,7 @@
 # 与固件约定: RTT 通道 1 = 发射架协议
 #   下行(PC->MCU 命令): rtt_write(1, b"...\n")
 #   上行(MCU->PC 遥测): rtt_read(1, N)
+import os
 import threading
 import time
 
@@ -13,7 +14,7 @@ except Exception as _e:  # noqa: BLE001
     _IMP_ERR = _e
 
 JLINK_DIR = r"C:\Program Files\SEGGER\JLink_V966"
-DEVICE = "STM32F407IG"
+DEVICE = os.environ.get("DART_RTT_DEVICE", "STM32F407IG")
 SPEED = 4000
 RTT_CH = 1
 
