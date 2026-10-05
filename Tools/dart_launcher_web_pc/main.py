@@ -3,6 +3,7 @@
 # 运行: python main.py   然后浏览器打开 http://127.0.0.1:8000
 # 依赖: pip install pylink-square  (J-Link 需用 SWD 接 C 板)
 
+import os
 import time
 
 from proto import Bus
@@ -27,7 +28,8 @@ def main():
     servo = PTK7350(bus, "trigger")
     task = Task(bus)
     web = WebServer(bus, motors, servo, task)
-    print("HTTP server: http://%s:%d" % (web.BIND_HOST, web.BIND_PORT))
+    print("HTTP server: http://%s:%s" %
+          (os.environ.get("DART_WEB_HOST", "127.0.0.1"), os.environ.get("DART_WEB_PORT", "8000")))
     print("(Ctrl+C 退出)")
 
     last_hb = 0
